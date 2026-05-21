@@ -8,10 +8,14 @@
 //
 // CALL-ORDER REQUIREMENT (important — read this before refactoring):
 // set_topology() MUST be called BEFORE install_cpu_hooks(). Once our
-// inline detours are installed, GetProcAddress returns the patched
-// (detour) address, not the original implementation. Calling the
-// detour from set_topology would feed our own lies back into our
-// "real" topology, defeating the entire mechanism.
+// inline detours are installed, calling kernel32's exported topology
+// APIs (whether via the IAT or via a freshly-resolved GetProcAddress
+// pointer) enters our detour code, because MinHook has patched the
+// function prologue in place. GetProcAddress doesn't return a
+// "different" pointer post-hook — it returns the same exported
+// address as before, but the bytes at that address now jump to our
+// detour. Calling that from set_topology() would feed our own lies
+// back into our "real" topology, defeating the entire mechanism.
 //
 // The current attach() sequence in dllmain.cpp satisfies this order;
 // any future refactor that wants to call set_topology() after
@@ -42,12 +46,16 @@ void set_topology(WORD desired) {
     //
     // Call-order requirement: set_topology() MUST be called BEFORE
     // install_cpu_hooks(). Once our inline detours are installed,
-    // GetProcAddress returns the patched (detour) address, not the
-    // original, and the detours would lie to us about the real CPU
-    // count — defeating the purpose. The current attach() in dllmain.cpp
-    // satisfies this order; any future refactor that wants to call
-    // set_topology() after install_cpu_hooks() would need to save the
-    // unhooked function pointers here BEFORE hook install.
+    // calling these APIs (via any pointer to them) enters our detour
+    // code, because MinHook has patched the function prologue in
+    // place. GetProcAddress returns the same exported address pre-
+    // and post-hook — what changes is the machine code at that
+    // address. Calling the patched code from set_topology would feed
+    // our own lies back into our "real" topology, defeating the
+    // purpose. The current attach() in dllmain.cpp satisfies this
+    // order; any future refactor that wants to call set_topology()
+    // after install_cpu_hooks() would need to save the original
+    // function bytes / unpatched call path here BEFORE hook install.
     using PFN_GNSI = void  (WINAPI*)(LPSYSTEM_INFO);
     using PFN_GAPC = DWORD (WINAPI*)(WORD);
     using PFN_GAGC = WORD  (WINAPI*)();

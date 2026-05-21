@@ -216,17 +216,21 @@ HMODULE load_system_dxgi_and_resolve() {
     // from THAT file's directory instead of mine."
     //
     // Concretely: when the loader maps System32\dxgi.dll, dxgi has
-    // its own dependencies (d3d11.dll, etc.) which should be resolved
-    // from System32, NOT from <game>\retail\ (which is our load
-    // directory). Without this flag, dxgi's dependencies would search
-    // <game>\retail\ first — and if a malicious actor had planted
-    // d3d11.dll there, dxgi would load THAT. The flag prevents
-    // exactly that attack by pinning the search to System32.
-    //
-    // Could also use LOAD_LIBRARY_SEARCH_SYSTEM32 (Win8+) for the
-    // same effect with stricter semantics, but the absolute-path +
-    // ALTERED_SEARCH_PATH combo works on Win7 SP1 (our minimum
-    // supported OS, matching DXMD's minimum).
+    // its own dependencies (d3d11.dll, etc.). Without this flag, the
+    // dependency search starts in the loading PROCESS'S directory —
+    // which for us is the game folder, NOT System32. With the flag,
+    // the search starts in the directory of the file we're loading
+    // (System32\dxgi.dll's directory = System32). That avoids
+    // resolving dxgi's dependencies out of <game>\retail\ if anyone
+    // had ever planted a same-named DLL there. (It is not the
+    // strictest possible pinning — Windows still applies its standard
+    // search order after that starting point. The stricter
+    // LOAD_LIBRARY_SEARCH_SYSTEM32 [Win8+] limits resolution to
+    // System32 only, but isn't available on our Win7 SP1 baseline.
+    // The absolute-path + ALTERED_SEARCH_PATH combo is the best
+    // we can portably do, and in practice dxgi's dependencies are
+    // all System32 binaries that Windows resolves before any
+    // app-dir lookup anyway.)
     HMODULE h = LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!h) {
         log_line("FATAL: could not load real dxgi: %ls (err %lu)", path, GetLastError());

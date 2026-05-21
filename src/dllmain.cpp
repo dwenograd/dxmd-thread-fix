@@ -158,7 +158,8 @@
 //      from DllMain if this fails (see UNUSUAL THING #4).
 //   6. set_topology — capture the REAL CPU count via direct
 //      GetProcAddress (must run BEFORE step 7, because once hooks
-//      are installed, GetProcAddress returns the patched address).
+//      are installed the API code itself is patched and every
+//      caller — including us — enters the detour).
 //   7. install_cpu_hooks — three-pass MinHook install. See
 //      cpu_hooks.cpp for the design.
 //   8. Log FIX STATUS: ACTIVE or INACTIVE so the user can spot it.

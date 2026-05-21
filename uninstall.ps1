@@ -181,16 +181,25 @@ if ($unparseableBackups.Count -gt 0) {
     exit 1
 }
 
-# 4. Execute. Order: restore-FROM-backup first (preserving the backup
-#    we just copied from, in case the active-DLL delete fails — but
-#    don't delete active DLL yet); then delete active DLL; then delete
-#    backups; then delete ini and log.
+# 4. Execute. Order:
+#    - If there's a backup to restore: overwrite the active dxgi.dll
+#      with the oldest backup (this is the "restore"; on NTFS the
+#      overwrite is atomic, so we can't end up with no DLL even if
+#      the operation is interrupted). Then delete every backup file.
+#    - If there's no backup: delete the active DLL only if we agreed
+#      to above (dllAction == delete-ours or delete-foreign-forced).
+#    - Then delete the INI and the log file regardless.
+#
+#    There is no separate "delete the active DLL THEN restore"
+#    sequence — Copy-Item -Force IS the restore, and it leaves a
+#    file at $dll for the entire operation. Doing it in two steps
+#    (delete, then copy) would create a brief window where the user
+#    has no dxgi.dll, which matters if the script crashes mid-way.
 
 if ($restoreFrom) {
-    # If we're going to delete an "ours" DLL AND have a backup to
-    # restore, do the restore first (overwriting the active DLL is
-    # equivalent to delete+restore, and is atomic at the filesystem
-    # level so we can't leave the user with no DLL).
+    # Copy the oldest backup over the active DLL. -Force ensures we
+    # overwrite (the file is the dxmd-thread-fix DLL we just verified
+    # by VERSIONINFO identity check above; this is what we want).
     Copy-Item -LiteralPath $restoreFrom.File.FullName -Destination $dll -Force
     Write-Host "Restored pre-dxmd-thread-fix dxgi.dll from oldest backup:" -ForegroundColor Yellow
     Write-Host "  $($restoreFrom.File.Name)  (stamp $($restoreFrom.Stamp.ToString('s')))" -ForegroundColor Yellow

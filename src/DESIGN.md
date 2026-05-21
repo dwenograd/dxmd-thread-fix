@@ -310,9 +310,11 @@ source of truth.
 
 `set_topology()` MUST run before `install_cpu_hooks()`, because it
 calls the unhooked APIs via `GetProcAddress` to record the real
-values. After hooks are installed, GetProcAddress would return our
-hooked addresses, and calling them would return our lies. The call
-order in `dllmain.cpp::attach()` is correct; this is documented
+values. After hooks are installed, the API code itself is patched —
+`GetProcAddress` returns the same exported address as before, but
+calling that address enters our detour. Running `set_topology()`
+post-hook would feed our own lies back into our "real" topology. The
+call order in `dllmain.cpp::attach()` is correct; this is documented
 inline as a maintenance invariant.
 
 ---
@@ -350,12 +352,27 @@ What this DLL is allowed to do, at runtime:
 - Resolve 20 specific exports from that DLL and forward calls.
 - Install MinHook detours on six kernel32-resolved APIs.
 
-What it doesn't do (and can't, because the imports don't allow it):
-- No network (no `ws2_32`, no `wininet`, no `winhttp`).
-- No registry writes (no `advapi32!Reg*Value*`).
-- No process creation (no `kernel32!CreateProcess*`, no `shell32!ShellExecute*`).
-- No file system writes outside its own log and what install.ps1 does.
-- No save-data access (we don't touch `Documents/`, `%APPDATA%`,
+What this DLL is technically capable of (what the import surface
+allows) vs. what the source actually shows it doing:
+
+- It imports `LoadLibraryExW` and `GetProcAddress`, so in principle
+  it could load any other DLL on the system. The source shows the
+  ONLY use of `LoadLibraryExW` is for `System32\dxgi.dll` (absolute
+  path built from `GetSystemDirectoryW`) — see
+  `dxgi_exports.cpp::load_system_dxgi_and_resolve`. Verify by grep.
+- It does NOT import `ws2_32`, `wininet`, `winhttp` (no socket /
+  HTTP capability — would need a runtime LoadLibrary to get it, and
+  the source contains no such call).
+- It does NOT import `advapi32` (no registry capability at all).
+- It does NOT import any of `kernel32!CreateProcess*`,
+  `shell32!ShellExecute*` (no process-creation capability — same
+  caveat: it COULD via dynamic load, but the source shows it
+  doesn't).
+- It does NOT touch the file system outside its own
+  `dxmd-thread-fix.log` and the per-line CreateFileW pattern in
+  `log.cpp`. Verify with `dumpbin /imports dxgi.dll` — kernel32 is
+  the only library imported.
+- It does NOT touch save data (`Documents/`, `%APPDATA%`,
   PSOCache.bin, Steam userdata, or anything Steam-Cloud-tracked).
 
 `dumpbin /imports dist/dxgi.dll` confirms the import surface is

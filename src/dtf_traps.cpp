@@ -173,12 +173,12 @@ dtf_trap_HRESULT_void(void) {
 // DXGIDisableVBlankVirtualization(HANDLE hAdapter) -> HRESULT
 //
 // This signature is undocumented; the parameter is community-reverse-
-// engineered as a DXGI adapter handle. We declare the param correctly
-// so the compiler emits the proper register-usage stub even though we
-// ignore the value. (If we declared `void` here, the compiler might
-// not preserve RCX across the call, which COULD matter on some future
-// calling-convention edge case. Cheap to get right; not worth saving
-// 4 bytes.)
+// engineered as a DXGI adapter handle. We declare the param to
+// document the intended export shape (so anyone comparing this file
+// against MSDN or Wine's headers can match it up). The trap never
+// forwards the call so it doesn't actually matter whether RCX is
+// preserved across this function — but writing the signature out
+// makes the source match the apparent contract.
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_HRESULT_HANDLE(HANDLE /*hAdapter*/) {
     return DXGI_ERROR_NOT_FOUND;
