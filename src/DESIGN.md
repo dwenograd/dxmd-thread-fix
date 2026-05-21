@@ -230,14 +230,20 @@ and treated as optional.
 General Windows advice is "don't do non-trivial work in DllMain".
 We do, deliberately, because:
 
-- **By the time our DllMain runs, the loader has only just begun
-  processing DXMD's static imports.** ApexFramework, PhysX*, fmod,
-  bink, amd_ags — have not had their initialization code run yet.
-  Several of those modules import topology APIs (visible in dumpbin
-  /imports) and may call them during their own init; if we deferred
-  our hook install to a worker thread, the worker wouldn't be
-  scheduled before those modules ran their init code and the crash
-  would still happen.
+- **In DXMD's observed import/init order, our DllMain runs before
+  most middleware modules have done their initialization work.**
+  Strictly: a dxgi-proxy DLL is guaranteed to load before DXMD's
+  entry point, because DXMD statically imports dxgi.dll. Whether
+  our DllMain runs before each SIBLING module's DllMain depends on
+  the loader's topological walk of the import graph, which is
+  module-specific and not a documented loader invariant.
+  Empirically (validated by in-game testing) our DllMain runs
+  before ApexFramework, PhysX*, fmod, bink, and amd_ags have done
+  their init work. Several of those modules import topology APIs
+  (visible in dumpbin /imports) and may call them during their own
+  init; if we deferred our hook install to a worker thread, the
+  worker wouldn't be scheduled before those modules ran their init
+  code and the crash would still happen.
 
 - **MinHook's `SuspendThread`-on-all-others loop is safe here**
   because in the normal DXMD startup path we target, no DXMD-
@@ -378,8 +384,9 @@ What this DLL is allowed to do, at runtime:
 - Read `dxmd-thread-fix.ini` next to itself (via
   `GetPrivateProfileIntW`).
 - Write `dxmd-thread-fix.log` next to itself, only when `LogLevel > 0`.
-- Load `C:\Windows\System32\dxgi.dll` (via `LoadLibraryExW` with the
-  absolute path returned by `GetSystemDirectoryW`).
+- Load the real `dxgi.dll` from the OS system directory returned by
+  `GetSystemDirectoryW` (normally `C:\Windows\System32` on a default
+  Windows install; can differ on non-default installs).
 - Resolve 20 specific exports from that DLL and forward calls.
 - Install MinHook detours on six kernel32-resolved APIs.
 
@@ -388,9 +395,10 @@ allows) vs. what the source actually shows it doing:
 
 - It imports `LoadLibraryExW` and `GetProcAddress`, so in principle
   it could load any other DLL on the system. The source shows the
-  ONLY use of `LoadLibraryExW` is for `System32\dxgi.dll` (absolute
-  path built from `GetSystemDirectoryW`) — see
-  `dxgi_exports.cpp::load_system_dxgi_and_resolve`. Verify by grep.
+  ONLY use of `LoadLibraryExW` is for the real dxgi.dll at the path
+  returned by `GetSystemDirectoryW` (normally `System32\dxgi.dll`)
+  — see `dxgi_exports.cpp::load_system_dxgi_and_resolve`. Verify
+  by grep.
 - It does NOT import `ws2_32`, `wininet`, `winhttp` (no socket /
   HTTP capability — would need a runtime LoadLibrary to get it, and
   the source contains no such call).
@@ -409,12 +417,13 @@ allows) vs. what the source actually shows it doing:
     * WRITE: `dxmd-thread-fix.log` next to the DLL, only if
       LogLevel > 0 — opened+written+closed per line (see
       `log.cpp::log_line`).
-    * LOAD:  `C:\Windows\System32\dxgi.dll` (absolute path built
-      from `GetSystemDirectoryW`).
-  (Loading System32\dxgi.dll causes the OS loader to transitively
+    * LOAD:  the real dxgi.dll from the OS system directory
+      returned by `GetSystemDirectoryW` (normally
+      `C:\Windows\System32\dxgi.dll`).
+  (Loading the real dxgi.dll causes the OS loader to transitively
   map dxgi's own dependencies (ntdll, advapi32, gdi32, etc. — exact
   list varies by Windows version; verify on your system with
-  `dumpbin /imports C:\Windows\System32\dxgi.dll`). That's normal
+  `dumpbin /imports` on the actual System32\dxgi.dll). That's normal
   OS behavior outside this DLL's direct control.)
   An import-table view alone cannot prove path confinement —
   kernel32 already provides CreateFileW/FindFirstFileW/etc., so

@@ -224,15 +224,54 @@ if (Test-Path -LiteralPath $existingDxgi) {
         if (-not $Force) {
             throw "Aborting to avoid clobbering the other mod. Re-run with -Force to back it up (as dxgi.dll.bak-<timestamp>) and install ours on top."
         }
-        # With -Force: back up the foreign DLL, but ONLY IF we don't
-        # already have a backup. The first backup is the user's original
-        # pre-DTF state — we must never overwrite it on subsequent runs,
-        # because that's the file uninstall.ps1 needs to restore.
+        # With -Force: back up the CURRENT foreign DLL, unless an
+        # existing backup with the same content is already present.
+        #
+        # The original (subtler) logic here was "if any backup exists,
+        # skip creating one." That preserves the user's pre-DTF
+        # original (the oldest backup) but loses a different foreign
+        # DLL if the user installed one between DTF -Force runs. For
+        # example:
+        #   1. User has ReShade installed. DTF -Force backs it up
+        #      as dxgi.dll.bak-X and installs ours.
+        #   2. User manually replaces our dxgi.dll with ENBSeries
+        #      (DTF not uninstalled; ReShade backup still present).
+        #   3. User re-runs DTF install -Force.
+        #   4. Old logic: "backups exist, skip." ENB lost.
+        # New logic: compute SHA-256 of the current foreign DLL,
+        # compare to each existing backup. If no backup already
+        # contains this exact file, create a NEW timestamped backup.
+        # The oldest backup is still the user's original pre-DTF
+        # state (we never delete backups in install.ps1; uninstall
+        # restores the oldest specifically). Any intermediate foreign
+        # DLLs the user installed between DTF runs end up in extra
+        # backups — possibly more than necessary, but never less than
+        # safe.
         $existingBackups = @(Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue)
-        if ($existingBackups.Count -gt 0) {
-            Write-Host "  $($existingBackups.Count) prior backup file(s) already present; preserving them." -ForegroundColor Yellow
+        $currentHash = (Get-FileHash -LiteralPath $existingDxgi -Algorithm SHA256).Hash
+        $alreadyBackedUp = $false
+        foreach ($eb in $existingBackups) {
+            try {
+                $ebHash = (Get-FileHash -LiteralPath $eb.FullName -Algorithm SHA256).Hash
+                if ($ebHash -eq $currentHash) {
+                    $alreadyBackedUp = $true
+                    break
+                }
+            } catch {
+                # Backup unreadable for some reason; treat as "not the
+                # same content" so we err on the side of creating a
+                # new backup rather than skipping.
+            }
+        }
+        if ($alreadyBackedUp) {
+            Write-Host "  Current foreign dxgi.dll matches an existing backup; not re-backing-up." -ForegroundColor Yellow
+            Write-Host "  $($existingBackups.Count) prior backup file(s) preserved." -ForegroundColor Yellow
             Write-Host "  (The oldest backup is the original pre-DTF state.)" -ForegroundColor Yellow
         } else {
+            if ($existingBackups.Count -gt 0) {
+                Write-Host "  $($existingBackups.Count) prior backup file(s) present, but current foreign DLL differs from all of them." -ForegroundColor Yellow
+                Write-Host "  Creating an additional backup so the current DLL can be restored later if needed." -ForegroundColor Yellow
+            }
             # Use millisecond precision + a short random suffix so that
             # concurrent -Force runs can't collide on identical filenames.
             $stamp  = Get-Date -Format 'yyyyMMdd-HHmmss-fff'

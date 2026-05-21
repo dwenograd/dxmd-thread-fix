@@ -132,14 +132,16 @@ if ($Config -eq 'Release') {
     #                initializers).
     #
     # /MT          — static CRT linkage. CRITICAL design choice.
-    #                The alternative /MD links against the user's
-    #                installed VC++ redistributable. Most users don't
-    #                have the exact redist version we'd target — and
-    #                the failure mode is "DLL fails to load with
-    #                obscure 'msvcp140.dll not found' error" which
-    #                would defeat the entire 'drop in and play' value
-    #                proposition of this fix. Static CRT makes our
-    #                ~150 KB dxgi.dll completely self-contained.
+    #                /MT links the CRT statically into our DLL so it
+    #                has no external VC runtime dependency. /MD
+    #                would require an appropriate VC++ runtime
+    #                redistributable to be installed and healthy on
+    #                the user's machine; if absent or broken, the
+    #                DLL would fail to load with an obscure
+    #                "msvcp140.dll not found" or similar error,
+    #                defeating the "drop in and play" value
+    #                proposition. Static CRT makes our ~150 KB
+    #                dxgi.dll completely self-contained.
     #
     #                Cost: ~80 KB of CRT statically baked in. Fine.
     #

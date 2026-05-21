@@ -186,8 +186,10 @@
 // ============================================================
 //
 //   1. log_init_deferred — record the log file path but DON'T open
-//      it yet. Open-on-first-write means a LogLevel=0 user sees no
-//      log artifact appear on disk at all (a trust signal).
+//      the log file yet. Deferred-open-until-config-parsed means a
+//      LogLevel=0 user sees no log artifact appear on disk at all
+//      (a trust signal — the DLL is provably silent when configured
+//      that way).
 //   2. load_config — read dxmd-thread-fix.ini next to this DLL.
 //   3. log_set_level — apply the parsed LogLevel; opens the log
 //      file if level > 0.

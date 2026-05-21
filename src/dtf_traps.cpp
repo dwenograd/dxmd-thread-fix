@@ -182,12 +182,14 @@ dtf_trap_HRESULT_void(void) {
 // This signature is undocumented and the community sources we found
 // disagree on the exact parameter shape. The trap below DELIBERATELY
 // does not depend on argument layout — it just returns an HRESULT
-// failure value. On x64 Windows, callers must already preserve
-// volatile registers (RCX, RDX, R8, R9) across calls and clean up
-// the shadow space themselves; we touch none of them. The HANDLE
-// parameter is written out for documentation only, so a reader
-// comparing this file to MSDN or to leaked headers can see what
-// shape we believed the export to have at the time we wrote this.
+// failure value. Under the Windows x64 ABI, RCX/RDX/R8/R9 are
+// volatile (caller-saved): the CALLER must already assume those
+// registers can be clobbered by any call, so it doesn't matter how
+// many parameters this stub does or doesn't formally accept — we
+// just don't touch caller state. The HANDLE parameter is written
+// out for documentation only, so a reader comparing this file to
+// MSDN or to leaked headers can see what shape we believed the
+// export to have at the time we wrote this.
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_HRESULT_HANDLE(HANDLE /*hAdapter*/) {
     return DXGI_ERROR_NOT_FOUND;
