@@ -1,25 +1,8 @@
-// config.cpp - INI file loader for dxmd-thread-fix.ini.
+// config.cpp - INI loader for dxmd-thread-fix.ini.
 //
-// Reads the INI file from the same folder as this DLL (resolved via
-// path_util's long-path-safe helper). All values are integers, read
-// via GetPrivateProfileIntW (which lives in kernel32 — no extra
-// dependency, no need to write our own INI parser).
-//
-// Defaults (defined in config.h) take effect if the file is missing,
-// the [ThreadFix] section is missing, or a specific key is missing.
-// That's intentional: a user who deletes the INI gets correct default
-// behavior, not a crash.
-//
-// All values are bounded with a sanity clamp before returning. The
-// LogicalProcessors upper clamp matches the eventual topology-level
-// clamp (64 logical processors = the single-processor-group ceiling),
-// so the "config: LogicalProcessors=X" log line agrees with the
-// effective topology cap and users aren't confused by a config value
-// that's silently reduced later.
-//
-// On extremely long install paths (more than MAX_PATH wchars), the
-// underlying get_module_dir() / HeapAlloc may fail; in that case we
-// return the defaults rather than crashing.
+// Reads from the same folder as this DLL via GetPrivateProfileIntW.
+// Missing file / section / keys fall back to the defaults in config.h.
+// All values are clamped to sane ranges before returning.
 
 #include "config.h"
 #include "path_util.h"
@@ -32,7 +15,7 @@ Config load_config(HMODULE self) {
     Config c;
     wchar_t* dir = get_module_dir(self);
     if (!dir) return c;
-    // Build "<dir>dxmd-thread-fix.ini" into a fresh heap buffer.
+    // Build "<dir>dxmd-thread-fix.ini".
     static const wchar_t kIniName[] = L"dxmd-thread-fix.ini";
     size_t dirLen = 0; while (dir[dirLen]) ++dirLen;
     size_t pathLen = dirLen + (sizeof(kIniName) / sizeof(wchar_t));  // includes null
@@ -45,7 +28,6 @@ Config load_config(HMODULE self) {
     }
     free_wstr(dir);
 
-    // GetPrivateProfileIntW lives in kernel32 - no extra dependency.
     c.logical_processors = static_cast<int>(GetPrivateProfileIntW(
         L"ThreadFix", L"LogicalProcessors", c.logical_processors, path));
     c.clamp_affinity = static_cast<int>(GetPrivateProfileIntW(
@@ -55,11 +37,8 @@ Config load_config(HMODULE self) {
 
     HeapFree(GetProcessHeap(), 0, path);
 
-    // Sanity clamps. `LogicalProcessors` is later re-clamped to
-    // `min(real_count, 64)` by set_topology(); we cap here at 64 too
-    // so the "config: LogicalProcessors=X" log line agrees with the
-    // effective topology cap and users aren't confused by a config
-    // value > 64 that's silently reduced later.
+    // Cap LogicalProcessors at 64 to match the topology.cpp clamp (single
+    // processor group ceiling = DWORD_PTR width on x64).
     if (c.logical_processors < 1)  c.logical_processors = 1;
     if (c.logical_processors > 64) c.logical_processors = 64;
     if (c.clamp_affinity < 0) c.clamp_affinity = 0;
