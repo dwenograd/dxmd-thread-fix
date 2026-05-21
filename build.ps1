@@ -281,7 +281,12 @@ $linkFlags = @(
     # explicit makes the security posture self-documenting.)
     # =================================================================
     '/DYNAMICBASE',          # ASLR — DLL is randomly relocated at load
-    '/HIGHENTROPYVA',        # 64-bit ASLR (full address-space entropy)
+    '/HIGHENTROPYVA',        # Requests high-entropy 64-bit ASLR on
+                             # OS versions that support it (Win 8+
+                             # honors it fully; on Win7 SP1 it's
+                             # accepted but the effective entropy is
+                             # less). /DYNAMICBASE above is the
+                             # baseline ASLR guarantee.
     '/NXCOMPAT',             # DEP — non-executable data pages
     # /DEF specifies the module-definition file that lists our 20 dxgi
     # exports by exact name AND ordinal. We use a .def file (not

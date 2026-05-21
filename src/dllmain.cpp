@@ -71,9 +71,9 @@
 //       advice — it's a constrained, validated tradeoff specific
 //       to proxy-DLL forwarding.
 //
-// Every dxgi-proxy game mod in the wild (Special K, ReShade, ENBSeries,
-// etc.) uses this exact pattern. Decades of production use confirms
-// it works for this specific shape.
+// Many established dxgi-proxy game mods (Special K, ReShade, ENBSeries,
+// etc.) use this same DllMain-install pattern. Years of production
+// use across those projects confirms it works for this specific shape.
 //
 // ============================================================
 // UNUSUAL THING #2: We do NOT call DisableThreadLibraryCalls

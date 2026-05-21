@@ -172,6 +172,14 @@ if ($running) {
 # same try block. A code-curious user will see this transient file
 # appear if they're watching retail/ during install and we want them
 # to be able to find this comment to understand what it was.
+#
+# NOTE: this preflight is NOT a transactional safety guarantee. A
+# later Copy-Item -Force can still fail mid-operation (antivirus
+# scan racing the write, sharing violations, disk full, transient
+# I/O errors, etc.). The catch is the BACKUP file we create before
+# overwriting the active dxgi.dll — if the copy fails or the user
+# notices something wrong, the .bak file in retail/ is the recovery
+# path. Uninstall.ps1 knows how to find and restore from it.
 $testFile = Join-Path $retail "._dtf_writetest_$([guid]::NewGuid().ToString('N')).tmp"
 try {
     [System.IO.File]::WriteAllText($testFile, "test")

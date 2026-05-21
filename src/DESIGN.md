@@ -412,11 +412,17 @@ allows) vs. what the source actually shows it doing:
     * LOAD:  `C:\Windows\System32\dxgi.dll` (absolute path built
       from `GetSystemDirectoryW`).
   (Loading System32\dxgi.dll causes the OS loader to transitively
-  map dxgi's own dependencies — d3d11.dll, etc. — which is normal
+  map dxgi's own dependencies (ntdll, advapi32, gdi32, etc. — exact
+  list varies by Windows version; verify on your system with
+  `dumpbin /imports C:\Windows\System32\dxgi.dll`). That's normal
   OS behavior outside this DLL's direct control.)
-  Verify with `dumpbin /imports dxgi.dll` — kernel32 is the only
-  library imported, so any other file access would require a
-  dynamic LoadLibrary that the source doesn't make.
+  An import-table view alone cannot prove path confinement —
+  kernel32 already provides CreateFileW/FindFirstFileW/etc., so
+  having only kernel32 as an import does NOT mean we can only
+  touch the files listed above. The real proof is source review:
+  grep the source for `CreateFile`, `OpenFile`, `GetProcAddress`,
+  and verify the only paths passed are the INI/log filenames and
+  the System32\dxgi.dll absolute path computed at load time.
 - It does NOT touch save data (`Documents/`, `%APPDATA%`,
   PSOCache.bin, Steam userdata, or anything Steam-Cloud-tracked).
 

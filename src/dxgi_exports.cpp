@@ -77,8 +77,9 @@ extern "C" HRESULT WINAPI dtf_trap_HRESULT_HANDLE(HANDLE);
 //   - OS loader's app-compat shim layer (apphelp.dll) runs its
 //     compat-fixup pass on the just-loaded DLL. For dxgi, that pass
 //     calls SetAppCompatStringPointer to apply per-app compat data.
-//   - apphelp resolves SetAppCompatStringPointer via our IAT → gets
-//     our exported stub address.
+//   - apphelp resolves SetAppCompatStringPointer via our export
+//     table (the dxgi proxy DLL was just loaded; its exports are
+//     now in apphelp's reach) → gets our exported stub address.
 //   - apphelp calls our stub → jmp QWORD PTR [pfn_SetAppCompatStringPointer]
 //   - pfn_SetAppCompatStringPointer is still nullptr (DllMain hasn't
 //     run yet — apphelp runs BEFORE DllMain).
@@ -220,7 +221,8 @@ HMODULE load_system_dxgi_and_resolve() {
     // from THAT file's directory instead of mine."
     //
     // Concretely: when the loader maps System32\dxgi.dll, dxgi has
-    // its own dependencies (d3d11.dll, etc.). Without this flag, the
+    // its own dependencies (ntdll, advapi32, gdi32, etc. — exact
+    // list varies by Windows version). Without this flag, the
     // dependency search starts in the loading PROCESS'S directory —
     // which for us is the game folder, NOT System32. With the flag,
     // the search starts in the directory of the file we're loading

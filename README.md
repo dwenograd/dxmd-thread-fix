@@ -601,9 +601,12 @@ entry point. By placing our `dxgi.dll` in DXMD's own directory
 (`retail\`), we get loaded first — earlier than any of DXMD's own
 threads or worker code runs.
 
-This requires us to be a faithful drop-in replacement for `dxgi.dll`:
-the loader will resolve all 20 of DXMD's dxgi imports through us, and
-we have to forward each one correctly to the real `C:\Windows\System32\dxgi.dll`.
+This requires us to be a faithful drop-in replacement for `dxgi.dll`.
+Our proxy exports the 20 dxgi exports captured from System32 (DXMD
+itself imports a subset of these via the IAT; middleware and PIX-
+style tooling may resolve others by name or ordinal at runtime via
+GetProcAddress). The loader resolves DXMD's dxgi imports through
+us, and we forward each one to the real `C:\Windows\System32\dxgi.dll`.
 That's the `src/dxgi_stubs.asm` file — 20 single-instruction tail jumps,
 one per dxgi export, each routed through a pointer that our DllMain
 overwrites with the real System32 dxgi address.
@@ -646,9 +649,17 @@ and is documented at length in [`src/dtf_traps.cpp`](https://github.com/dwenogra
 Even though DXMD itself only imports `GetSystemInfo`, middleware
 (`bink2w64.dll`, `amd_ags64.dll`, possibly Apex/PhysX) may dynamically
 resolve other CPU-discovery APIs through `GetProcAddress`. Hooking
-all 6 with a consistent fake topology means everyone in the process
-gets the same lie — there's no code path that sees 8 from one API
-and 64 from another.
+all 6 with a consistent fake topology means every observed code
+path in DXMD and its bundled middleware that queries CPU topology
+through these APIs gets the same lie. We have not exhaustively
+hooked every Windows topology API (e.g. GetLogicalProcessorInformation,
+GetLogicalProcessorInformationEx, GetProcessAffinityMask, lower-
+level NtQuerySystemInformation calls), only the 6 above that DXMD
+or its middleware actually call in observed-startup traces. If a
+future Windows update or undiscovered code path used a different
+API, that path would still see the real CPU count — though the
+8-core fake topology we report through the hooked APIs should
+have already shaped allocation/thread-pool sizing by then.
 
 The 6 hooks are treated as an **all-or-nothing required set**: if any
 of them fails to install, we tear down the others and log
