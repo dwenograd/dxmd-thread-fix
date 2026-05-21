@@ -12,6 +12,30 @@
 
 ---
 
+## Up front: this is an AI-generated fix
+
+Hey, as you can probably guess this is an AI-generated fix for one of
+the biggest pain points of running DXMD on a modern system. I'll admit
+right out the gate, this entire patch, end to end, is AI-generated.
+It's doing things that are way above my skill level — I could never
+do this without it. But after 10 years of everyone living with this
+bug, putting together half-working fixes to try and play this game,
+it's clear something like this was needed to be the final word on
+getting this playable forever.
+
+I hope that this proves to be a durable fix for the game. I tried to
+make sure all the foundations were in place to make this not only run
+today but on a PC 10 years from now so this game lives forever.
+
+Since trusting a random DLL off the internet is always a sketchy
+thing, I told it to be as verbose as possible in the comments,
+explaining every step of what this thing does to get it working for
+anyone who wants to go through and check its work. It also did 90
+security review checks (3 per round) to make sure this is as
+bulletproof and low risk as possible.
+
+---
+
 ## Table of contents
 
 - [Should you trust this DLL?](#should-you-trust-this-dll)
