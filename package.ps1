@@ -84,6 +84,12 @@ Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEac
 $shaFile = Join-Path $release "dxmd-thread-fix-v$Version-SHA256SUMS.txt"
 Set-Content -LiteralPath $shaFile -Value ($manifest -join "`r`n") -Encoding ASCII
 
+# Also copy the manifest INTO the staging folder so it ships in the zip.
+# Users get a single zip with everything they need to verify integrity
+# locally, not "DLL here, hashes on a separate web page somewhere."
+$inZipSha = Join-Path $stage 'SHA256SUMS.txt'
+Set-Content -LiteralPath $inZipSha -Value ($manifest -join "`r`n") -Encoding ASCII
+
 # -- Build the zip -----------------------------------------------------
 
 $zip = Join-Path $release "dxmd-thread-fix-v$Version.zip"

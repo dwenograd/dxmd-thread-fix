@@ -19,7 +19,8 @@ Invoke-WebRequest `
 
 ## What's vendored
 
-Only the source needed to build MinHook as part of our DLL:
+In the **source repository**, the full upstream tree is in this
+directory (only the files needed to build MinHook as part of our DLL):
 
 ```
 include/MinHook.h
@@ -35,6 +36,11 @@ src/hde/table64.h
 Unmodified upstream files. To verify, compare against the upstream
 tag by checksumming each file or re-running the import command above
 and diffing the result.
+
+In the **binary release zip**, only this `PROVENANCE.md` and the
+upstream `LICENSE.txt` are shipped (we satisfy MinHook's BSD-2-Clause
+attribution requirement; the source itself is in the GitHub repo / the
+auto-generated source archive for each release tag).
 
 ## What our code calls
 

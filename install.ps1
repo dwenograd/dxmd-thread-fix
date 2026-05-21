@@ -29,23 +29,31 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSCommandPath
-$dll  = Join-Path $root 'dist\dxgi.dll'
-$ini  = Join-Path $root 'dxmd-thread-fix.ini'
 
-if (-not (Test-Path -LiteralPath $dll)) {
+# The DLL we install can be in one of two layouts:
+#   - Source-tree layout:    $root\dist\dxgi.dll
+#   - Release-zip layout:    $root\dxgi.dll
+# This script is shipped in both, so we accept either.
+$dllSourceTree  = Join-Path $root 'dist\dxgi.dll'
+$dllReleaseZip  = Join-Path $root 'dxgi.dll'
+if (Test-Path -LiteralPath $dllSourceTree) {
+    $dll = $dllSourceTree
+} elseif (Test-Path -LiteralPath $dllReleaseZip) {
+    $dll = $dllReleaseZip
+} else {
     throw @"
-Built dxgi.dll not found at:
-    $dll
+Built dxgi.dll not found.
+
+Looked in both:
+    $dllSourceTree    (source-tree layout, after build.ps1)
+    $dllReleaseZip   (release-zip layout, after extracting the release zip)
 
 If you cloned the source repo: run build.ps1 first.
-If you downloaded a release zip: it should contain dxgi.dll directly; you can either:
-    (a) place dxgi.dll and dxmd-thread-fix.ini manually in <game>\retail\, or
-    (b) put dxgi.dll into a dist\ subfolder next to this script and re-run.
+If you downloaded a release zip: make sure dxgi.dll is in the same folder as install.ps1
+(i.e. extract the zip with its directory structure intact).
 "@
 }
-if (-not (Test-Path -LiteralPath $ini)) {
-    throw "dxmd-thread-fix.ini not found at $ini."
-}
+$ini  = Join-Path $root 'dxmd-thread-fix.ini'
 
 # -- Identity helper: is a given dxgi.dll "ours"? -----------------------
 
@@ -183,8 +191,15 @@ if (Test-Path -LiteralPath $existingDxgi) {
             Write-Host "  $($existingBackups.Count) prior backup file(s) already present; preserving them." -ForegroundColor Yellow
             Write-Host "  (The oldest backup is the original pre-DTF state.)" -ForegroundColor Yellow
         } else {
-            $backup = "$existingDxgi.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
-            Copy-Item -LiteralPath $existingDxgi -Destination $backup -Force
+            # Use millisecond precision + a short random suffix so that
+            # concurrent -Force runs can't collide on identical filenames.
+            $stamp  = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
+            $suffix = -join ((1..4) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
+            $backup = "$existingDxgi.bak-$stamp-$suffix"
+            # Don't pass -Force here: if (improbably) a file with that
+            # exact name already exists, we want a loud failure rather
+            # than silently overwriting it.
+            Copy-Item -LiteralPath $existingDxgi -Destination $backup
             Write-Host "  Backed up foreign dxgi.dll -> $(Split-Path $backup -Leaf)" -ForegroundColor Yellow
         }
         $conflict = $true

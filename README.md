@@ -39,11 +39,19 @@ what to verify before you decide:
 
 ### Reading the source
 
-Everything is in this repo. The total size is ~1,300 lines of our own
-code, plus ~76 KB of [MinHook][mh] source for the hook installation
-(MinHook is vendored unmodified in `third_party/minhook/` — see
+Everything is in the GitHub repository
+(<https://github.com/dwenograd/dxmd-thread-fix>). The total size is
+~1,300 lines of our own code, plus ~76 KB of [MinHook][mh] source for
+the hook installation (MinHook is vendored unmodified in
+`third_party/minhook/` — see
 [`PROVENANCE.md`](third_party/minhook/PROVENANCE.md)). The files that
 matter:
+
+> **Note for release-zip users:** the binary release zip you download
+> contains only the runtime files you need (DLL, INI, scripts, docs,
+> license attribution). The full source is in the GitHub repo above and
+> in GitHub's auto-generated source archives for each tag. The source
+> file links below point at the repo.
 
 - [`src/dllmain.cpp`](src/dllmain.cpp) — entry point, ~200 lines
 - [`src/dtf_traps.cpp`](src/dtf_traps.cpp) — pre-resolve trap functions, ~110 lines
@@ -274,15 +282,17 @@ The script:
 After launching DXMD, check the log file:
 
 ```
-N:\Steam\steamapps\common\Deus Ex Mankind Divided\retail\dxmd-thread-fix.log
+<game folder>\retail\dxmd-thread-fix.log
 ```
+
+(e.g. `C:\Program Files (x86)\Steam\steamapps\common\Deus Ex Mankind Divided\retail\dxmd-thread-fix.log`)
 
 A working install looks like this:
 
 ```
 [20:30:01.123] dxmd-thread-fix attach: loaded at module handle 00007FFD32100000
 [20:30:01.124] config: LogicalProcessors=8 ClampAffinity=0 LogLevel=1
-[20:30:01.124] Host process: N:\Steam\steamapps\common\Deus Ex Mankind Divided\retail\DXMD.exe
+[20:30:01.124] Host process: <your Steam library>\steamapps\common\Deus Ex Mankind Divided\retail\DXMD.exe
 [20:30:01.127] Real dxgi loaded: C:\WINDOWS\system32\dxgi.dll @ 00007FFD4CE00000
 [20:30:01.127] dxgi exports resolved: 20 ok, 0 missing.
 [20:30:01.127] Fake topology: 8 logical processors, 1 group(s)  (real: 64 in 1 group(s))

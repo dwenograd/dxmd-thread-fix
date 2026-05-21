@@ -92,41 +92,125 @@ if ($running) {
     throw "DXMD.exe is currently running (PID $($running.Id)). Close the game and try again."
 }
 
-# -- Identify the installed dxgi.dll ------------------------------------
+# -- Plan the work (validate everything BEFORE deleting anything) -------
+#
+# We don't want a half-done uninstall that deletes the active dxgi.dll
+# and then fails to restore a backup. So: gather all the inputs,
+# validate them, then execute every step. Refuse early if anything is
+# wrong rather than committing partial changes.
 
 $dll = Join-Path $retail 'dxgi.dll'
 $ini = Join-Path $retail 'dxmd-thread-fix.ini'
 $log = Join-Path $retail 'dxmd-thread-fix.log'
 
+# 1. Decide whether we'll delete dxgi.dll.
+$dllAction = 'none'
+$dllReasonForRefusal = $null
+$dllVer = $null
 if (Test-Path -LiteralPath $dll) {
-    $isOurs = Test-IsOurs -Path $dll
-    if ($isOurs) {
-        $ver = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
-        Remove-Item -LiteralPath $dll -Force
-        Write-Host "Removed: $dll (was dxmd-thread-fix v$ver)" -ForegroundColor Green
+    if (Test-IsOurs -Path $dll) {
+        $dllAction = 'delete-ours'
+        $dllVer = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
     } elseif ($DeleteForeignDxgi) {
-        $product = ''
-        try { $product = (Get-Item -LiteralPath $dll).VersionInfo.ProductName } catch { }
-        Write-Host "WARNING: $dll does NOT identify as dxmd-thread-fix" -ForegroundColor Yellow
-        Write-Host "  VERSIONINFO ProductName: '$product'" -ForegroundColor Yellow
-        Write-Host "  You passed -DeleteForeignDxgi; deleting anyway." -ForegroundColor Yellow
-        Remove-Item -LiteralPath $dll -Force
-        Write-Host "Removed: $dll" -ForegroundColor Yellow
+        $dllAction = 'delete-foreign-forced'
     } else {
+        $dllAction = 'refuse'
         $product = ''
         try { $product = (Get-Item -LiteralPath $dll).VersionInfo.ProductName } catch { }
-        Write-Host "REFUSING to delete $dll" -ForegroundColor Red
-        Write-Host "  Its VERSIONINFO ProductName is: '$product'" -ForegroundColor Red
-        Write-Host "  That is NOT 'dxmd-thread-fix' - this is likely a DIFFERENT" -ForegroundColor Red
-        Write-Host "  mod (ReShade, Special K, ENB, ...) that also proxies dxgi.dll." -ForegroundColor Red
-        Write-Host "" -ForegroundColor Red
-        Write-Host "  If you are SURE this is meant to be dxmd-thread-fix (e.g. a build" -ForegroundColor Red
-        Write-Host "  too old to have VERSIONINFO), re-run with -DeleteForeignDxgi." -ForegroundColor Red
-        Write-Host "" -ForegroundColor Red
-        Write-Host "  (Leaving dxmd-thread-fix.ini and dxmd-thread-fix.log alone too)" -ForegroundColor Red
-        exit 1
+        $dllReasonForRefusal = $product
     }
 }
+
+# 2. Enumerate backups and parse their filename timestamps. We use
+#    TryParseExact in invariant culture so a malformed name doesn't
+#    throw mid-operation. Backups that don't match our exact naming
+#    scheme are reported but excluded from the "restore the oldest"
+#    decision — we won't trust their ordering.
+$allBackups = @(Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue)
+$parsedBackups = @()
+$unparseableBackups = @()
+$ci = [System.Globalization.CultureInfo]::InvariantCulture
+foreach ($bak in $allBackups) {
+    # Match both the short form (yyyyMMdd-HHmmss) created by older DTF
+    # versions AND the long form (yyyyMMdd-HHmmss-fff[-hex]) used now.
+    if ($bak.Name -match '^dxgi\.dll\.bak-(\d{8}-\d{6}(?:-\d{3})?)(?:-[0-9a-f]+)?$') {
+        $stampStr = $matches[1]
+        $stamp = [datetime]::MinValue
+        $formats = @('yyyyMMdd-HHmmss-fff', 'yyyyMMdd-HHmmss')
+        $ok = [datetime]::TryParseExact($stampStr, $formats, $ci, [System.Globalization.DateTimeStyles]::None, [ref]$stamp)
+        if ($ok) {
+            $parsedBackups += [pscustomobject]@{
+                File = $bak; Stamp = $stamp
+            }
+            continue
+        }
+    }
+    $unparseableBackups += $bak
+}
+$parsedBackups = $parsedBackups | Sort-Object Stamp
+$restoreFrom   = $null
+if ($parsedBackups.Count -gt 0) {
+    $restoreFrom = $parsedBackups[0]
+}
+
+# 3. Validate plan. Refuse if anything is off and we'd produce a
+#    partially-uninstalled state.
+if ($dllAction -eq 'refuse') {
+    Write-Host "REFUSING to delete $dll" -ForegroundColor Red
+    Write-Host "  Its VERSIONINFO ProductName is: '$dllReasonForRefusal'" -ForegroundColor Red
+    Write-Host "  That is NOT 'dxmd-thread-fix' - this is likely a DIFFERENT" -ForegroundColor Red
+    Write-Host "  mod (ReShade, Special K, ENB, ...) that also proxies dxgi.dll." -ForegroundColor Red
+    Write-Host "" -ForegroundColor Red
+    Write-Host "  If you are SURE this is meant to be dxmd-thread-fix (e.g. a build" -ForegroundColor Red
+    Write-Host "  too old to have VERSIONINFO), re-run with -DeleteForeignDxgi." -ForegroundColor Red
+    Write-Host "" -ForegroundColor Red
+    Write-Host "  (Leaving dxmd-thread-fix.ini and dxmd-thread-fix.log alone too)" -ForegroundColor Red
+    exit 1
+}
+if ($unparseableBackups.Count -gt 0) {
+    Write-Host "REFUSING to proceed: $($unparseableBackups.Count) backup file(s) have" -ForegroundColor Red
+    Write-Host "names that don't match the expected 'dxgi.dll.bak-YYYYMMDD-HHMMSS[-fff[-hex]]' format:" -ForegroundColor Red
+    foreach ($u in $unparseableBackups) {
+        Write-Host "  $($u.Name)" -ForegroundColor Red
+    }
+    Write-Host "" -ForegroundColor Red
+    Write-Host "Rather than guess which one is your pre-DTF original, please:" -ForegroundColor Red
+    Write-Host "  1. Inspect each backup manually," -ForegroundColor Red
+    Write-Host "  2. Rename or delete the unrecognized one(s)," -ForegroundColor Red
+    Write-Host "  3. Re-run this script." -ForegroundColor Red
+    exit 1
+}
+
+# 4. Execute. Order: restore-FROM-backup first (preserving the backup
+#    we just copied from, in case the active-DLL delete fails — but
+#    don't delete active DLL yet); then delete active DLL; then delete
+#    backups; then delete ini and log.
+
+if ($restoreFrom) {
+    # If we're going to delete an "ours" DLL AND have a backup to
+    # restore, do the restore first (overwriting the active DLL is
+    # equivalent to delete+restore, and is atomic at the filesystem
+    # level so we can't leave the user with no DLL).
+    Copy-Item -LiteralPath $restoreFrom.File.FullName -Destination $dll -Force
+    Write-Host "Restored pre-dxmd-thread-fix dxgi.dll from oldest backup:" -ForegroundColor Yellow
+    Write-Host "  $($restoreFrom.File.Name)  (stamp $($restoreFrom.Stamp.ToString('s')))" -ForegroundColor Yellow
+    foreach ($pb in $parsedBackups) {
+        Remove-Item -LiteralPath $pb.File.FullName -Force
+    }
+    if ($parsedBackups.Count -gt 1) {
+        Write-Host "  Cleaned $($parsedBackups.Count) backup file(s)." -ForegroundColor DarkGray
+    }
+} else {
+    # No backup. Just delete the active DLL (if there is one and we agreed to).
+    if ($dllAction -eq 'delete-ours') {
+        Remove-Item -LiteralPath $dll -Force
+        Write-Host "Removed: $dll (was dxmd-thread-fix v$dllVer)" -ForegroundColor Green
+    } elseif ($dllAction -eq 'delete-foreign-forced') {
+        Remove-Item -LiteralPath $dll -Force
+        Write-Host "Removed: $dll (forced delete; was not dxmd-thread-fix)" -ForegroundColor Yellow
+    }
+}
+
 if (Test-Path -LiteralPath $ini) {
     Remove-Item -LiteralPath $ini -Force
     Write-Host "Removed: $ini" -ForegroundColor Green
@@ -134,37 +218,6 @@ if (Test-Path -LiteralPath $ini) {
 if (Test-Path -LiteralPath $log) {
     Remove-Item -LiteralPath $log -Force
     Write-Host "Removed: $log" -ForegroundColor Green
-}
-
-# -- Restore the OLDEST backup (= pre-DTF original) and clean up --------
-
-$backups = @(Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue)
-# Sort by the timestamp embedded in the filename (dxgi.dll.bak-YYYYMMDD-HHMMSS),
-# NOT by LastWriteTime. Copy-Item preserves the source DLL's modification
-# timestamp, so the file's LastWriteTime reflects when the *original* DLL
-# was built, not when WE made the backup. The filename's timestamp suffix
-# is authoritative for "which backup was made first."
-$backups = $backups | Sort-Object -Property @{
-    Expression = {
-        if ($_.Name -match 'dxgi\.dll\.bak-(\d{8}-\d{6})$') {
-            [datetime]::ParseExact($matches[1], 'yyyyMMdd-HHmmss', $null)
-        } else {
-            $_.CreationTime  # fallback for unparseable names
-        }
-    }
-}
-if ($backups.Count -gt 0) {
-    $oldest = $backups[0]
-    Copy-Item -LiteralPath $oldest.FullName -Destination $dll -Force
-    Write-Host "Restored pre-dxmd-thread-fix dxgi.dll from oldest backup:" -ForegroundColor Yellow
-    Write-Host "  $($oldest.Name)" -ForegroundColor Yellow
-    # Clean up ALL backups (including the one we just restored from).
-    foreach ($bak in $backups) {
-        Remove-Item -LiteralPath $bak.FullName -Force
-    }
-    if ($backups.Count -gt 1) {
-        Write-Host "  Cleaned $($backups.Count) backup file(s)." -ForegroundColor DarkGray
-    }
 }
 
 Write-Host ""
