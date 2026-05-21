@@ -150,8 +150,12 @@ mean "factory created successfully", and the game would dereference
 the uninitialized output pointer. So:
 
 - **`dtf_trap_pre_resolve`** (generic, returns 0). Used for the
-  compat-pass exports apphelp actually calls, plus undocumented
-  private exports where 0 is a safe default.
+  compat-pass exports apphelp actually calls — empirically observed
+  to be safe for those — plus undocumented private exports
+  (PIX/DXGID3D10) as a best-effort fallback. Returning 0 is NOT
+  semantically proven safe for arbitrary undocumented HRESULT-shaped
+  exports; in practice these resolve to real System32 dxgi
+  addresses at runtime so the trap is dead code for them.
 - **`dtf_trap_CreateDXGIFactory`** (`(REFIID, void**) -> HRESULT`).
   Zeros the out-pointer, returns `DXGI_ERROR_NOT_FOUND`. Used for
   `CreateDXGIFactory` and `CreateDXGIFactory1`.

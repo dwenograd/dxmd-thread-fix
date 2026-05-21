@@ -456,7 +456,7 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
 | | Status |
 |---|---|
 | DXMD build | Tested on 1.19.801.0 (final 2017 patch). The DLL does NOT enforce this at runtime; other builds may work but are untested. |
-| OS | Windows 11 — tested. Windows 10 — expected to work (the DLL imports nothing Windows-10-specific) but not specifically validated this release. Windows 7 SP1 / 8.1 — build targets that baseline but neither tested. |
+| OS | Windows 11 — tested. Windows 10 — expected to work (the DLL imports nothing Windows-10-specific) but not specifically validated this release. Windows 7 SP1 / 8.1 — build targets that baseline but neither tested. Older Windows ships an older System32 dxgi.dll with a smaller export set; the trap fallback in `dtf_traps.cpp` is designed to handle missing exports cleanly, but that path is itself less-tested. If you're on Win7/8.1, please file a bug report with `dxmd-thread-fix.log` attached if you see any `WARN: real dxgi missing export <name>` lines. |
 | Architecture | x64 — the only one DXMD ships in |
 | CPU | Any x86-64 CPU. The fix is most useful at 16+ logical processors but is harmless on smaller CPUs. |
 
