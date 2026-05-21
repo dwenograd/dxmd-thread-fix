@@ -42,6 +42,10 @@ if (-not (Test-Path -LiteralPath $vcvars)) { throw "vcvars64.bat not found at $v
 # them back into this PowerShell session. We quote $vcvars to handle
 # paths with spaces in 'Program Files (x86)'.
 $envDump = & cmd.exe /s /c "`"$vcvars`" >nul && set" 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ($envDump | Out-String) -ForegroundColor Red
+    throw "vcvars64.bat failed (exit $LASTEXITCODE). Visual Studio 2022's C++ workload may be incomplete or damaged."
+}
 foreach ($line in $envDump) {
     if ($line -match '^([^=]+)=(.*)$') {
         Set-Item -Path ("Env:" + $matches[1]) -Value $matches[2]

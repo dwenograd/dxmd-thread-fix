@@ -26,8 +26,17 @@ static void compute_log_path(HMODULE self) {
             break;
         }
     }
+    // Defensive: confirm the concatenation will fit, otherwise leave the
+    // log path empty so log_open() silently no-ops (rather than calling
+    // wcscat_s into the CRT invalid-parameter handler and crashing
+    // during DllMain on a very long install path).
+    const wchar_t kLogName[] = L"dxmd-thread-fix.log";
+    if (wcslen(buf) + wcslen(kLogName) + 1 > MAX_PATH) {
+        g_log_path[0] = 0;
+        return;
+    }
     wcscpy_s(g_log_path, MAX_PATH, buf);
-    wcscat_s(g_log_path, MAX_PATH, L"dxmd-thread-fix.log");
+    wcscat_s(g_log_path, MAX_PATH, kLogName);
 }
 
 void log_init(HMODULE self, int level) {

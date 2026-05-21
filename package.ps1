@@ -5,6 +5,7 @@
 #   dxmd-thread-fix-v<VERSION>-SHA256SUMS.txt   (per-file manifest, also embedded in zip)
 #   dxmd-thread-fix-v<VERSION>-headers.txt      (dumpbin /headers output)
 #   dxmd-thread-fix-v<VERSION>-exports.txt      (dumpbin /exports output)
+#   dxmd-thread-fix-v<VERSION>-imports.txt      (dumpbin /imports output)
 #
 # The zip contains everything an end-user needs:
 #   dxgi.dll
@@ -143,7 +144,9 @@ if (Test-Path -LiteralPath $vswhere) {
 # -- Build the zip -----------------------------------------------------
 
 $zip = Join-Path $release "dxmd-thread-fix-v$Version.zip"
-if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
+$zipPartial = "$zip.partial"
+if (Test-Path -LiteralPath $zip)        { Remove-Item -LiteralPath $zip        -Force }
+if (Test-Path -LiteralPath $zipPartial) { Remove-Item -LiteralPath $zipPartial -Force }
 
 Write-Host "=== Creating $zip ===" -ForegroundColor Cyan
 # Build the zip manually so we control:
@@ -151,9 +154,13 @@ Write-Host "=== Creating $zip ===" -ForegroundColor Cyan
 #    standard zip practice and what `tar -tf` etc. expect)
 #  - compression level
 #  - file ordering (sorted by relative path for reproducibility)
+#
+# Write to a .partial path first, rename to final on success. If anything
+# throws mid-way, the partial file is left behind for inspection but the
+# real release path is never populated with a half-built zip.
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$zipStream = [System.IO.File]::Create($zip)
+$zipStream = [System.IO.File]::Create($zipPartial)
 $archive   = [System.IO.Compression.ZipArchive]::new($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
     Get-ChildItem -LiteralPath $stage -Recurse -File |
@@ -173,6 +180,10 @@ try {
     $archive.Dispose()
     $zipStream.Dispose()
 }
+# Atomic rename. If the loop above threw, the .partial is on disk and
+# the final $zip path stays absent so the user can't accidentally ship
+# a half-built zip.
+Move-Item -LiteralPath $zipPartial -Destination $zip
 
 $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
 $dllHash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
@@ -199,6 +210,14 @@ Write-Host "  - ``dxmd-thread-fix-v$Version-exports.txt`` (dumpbin /exports outp
 Write-Host "  - ``dxmd-thread-fix-v$Version-imports.txt`` (dumpbin /imports output)"
 Write-Host ""
 Write-Host "Verify locally:"
-Write-Host '  PowerShell:  (Get-FileHash .\dxgi.dll -Algorithm SHA256).Hash'
-Write-Host '  Linux/macOS: sha256sum -c SHA256SUMS.txt   (manifest is in the zip)'
+Write-Host '  Verify the zip BEFORE extracting (PowerShell):'
+Write-Host "    (Get-FileHash .\dxmd-thread-fix-v$Version.zip -Algorithm SHA256).Hash"
+Write-Host "    # expected: $zipHash"
+Write-Host ''
+Write-Host '  Verify the DLL after extracting (PowerShell):'
+Write-Host '    (Get-FileHash .\dxgi.dll -Algorithm SHA256).Hash'
+Write-Host "    # expected: $dllHash"
+Write-Host ''
+Write-Host '  Verify ALL extracted files at once (Linux/macOS/Git-for-Windows):'
+Write-Host '    sha256sum -c SHA256SUMS.txt   (manifest is in the zip)'
 Write-Host "---"

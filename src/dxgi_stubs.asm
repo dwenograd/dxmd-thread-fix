@@ -4,9 +4,10 @@
 ;   jmp QWORD PTR [pfn_FOO]
 ; where pfn_FOO is a 64-bit global initialized at COMPILE TIME (in
 ; dxgi_exports.cpp) to one of the trap functions in dtf_traps.cpp.
-; After our DllMain runs, the loader overwrites each pfn_FOO with the
-; real System32 dxgi function pointer. Exports missing on the host's
-; Windows version keep pointing at their trap.
+; After our DllMain runs, load_system_dxgi_and_resolve() (in
+; dxgi_exports.cpp) overwrites each pfn_FOO with the real System32
+; dxgi function pointer. Exports missing on the host's Windows version
+; keep pointing at their trap.
 ;
 ; Tail-jumping (vs. C++ thunking) preserves the original calling
 ; convention, register state, parameter passing, and return value

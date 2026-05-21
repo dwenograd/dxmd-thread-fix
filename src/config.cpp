@@ -14,7 +14,17 @@ static void ini_path(HMODULE self, wchar_t* out, DWORD outLen) {
             break;
         }
     }
-    wcscat_s(out, outLen, L"dxmd-thread-fix.ini");
+    // Defensive: confirm there's room for the filename before wcscat_s,
+    // which would otherwise invoke the CRT invalid-parameter handler
+    // (and crash the process during DllMain) on extremely long install
+    // paths. If too long, leave the path empty; load_config() will
+    // treat that as "no INI" and use defaults.
+    const wchar_t kIniName[] = L"dxmd-thread-fix.ini";
+    if (wcslen(out) + wcslen(kIniName) + 1 > outLen) {
+        out[0] = 0;
+        return;
+    }
+    wcscat_s(out, outLen, kIniName);
 }
 
 Config load_config(HMODULE self) {

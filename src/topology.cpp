@@ -13,12 +13,16 @@ DWORD_PTR first_n_bits_mask(WORD n) {
 }
 
 void set_topology(WORD desired) {
-    // Resolve the real CPU-count APIs directly via GetProcAddress so we
-    // read TRUTH even if (hypothetically) hooks are already installed.
-    // This is defense-in-depth: today set_topology() is called BEFORE
-    // install_cpu_hooks() so the calls would be unhooked anyway, but
-    // future refactors could reorder that. Reading via direct function
-    // pointers from kernel32 makes this code robust to call order.
+    // Resolve the real CPU-count APIs directly via GetProcAddress.
+    //
+    // Call-order requirement: set_topology() MUST be called BEFORE
+    // install_cpu_hooks(). Once our inline detours are installed,
+    // GetProcAddress returns the patched (detour) address, not the
+    // original, and the detours would lie to us about the real CPU
+    // count — defeating the purpose. The current attach() in dllmain.cpp
+    // satisfies this order; any future refactor that wants to call
+    // set_topology() after install_cpu_hooks() would need to save the
+    // unhooked function pointers here BEFORE hook install.
     using PFN_GNSI = void  (WINAPI*)(LPSYSTEM_INFO);
     using PFN_GAPC = DWORD (WINAPI*)(WORD);
     using PFN_GAGC = WORD  (WINAPI*)();

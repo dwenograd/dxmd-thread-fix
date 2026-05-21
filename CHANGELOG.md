@@ -47,13 +47,13 @@ notorious alt-tab crash as a side effect of the same root-cause fix.
 - Vendors MinHook 1.3.3 (BSD-2-Clause) unmodified; see
   `third_party/minhook/PROVENANCE.md` for the upstream tag and commit hash.
 
-### Six rounds of independent review
+### Multiple rounds of independent review
 
-Before release, the codebase went through six rounds of parallel review
-using independent rubber-duck, code-review, and security-review agents
-covering correctness, security, edge cases, packaging, and
-documentation accuracy. Each round resulted in a hardening pass. Four
-independent security reviews all came back clean.
+Before release, the codebase went through multiple rounds of parallel
+review using independent rubber-duck, code-review, and security-review
+agents covering correctness, security, edge cases, packaging, and
+documentation accuracy. Each round resulted in a hardening pass. The
+security audits across all rounds came back clean.
 
 ### Known limitations (documented, not bugs)
 

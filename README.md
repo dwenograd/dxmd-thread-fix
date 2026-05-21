@@ -78,7 +78,7 @@ dumpbin.exe /imports dxgi.dll
 
 You'll see APIs from these categories (this is a summary; the
 complete imported-symbol list is in `dumpbin /imports dxgi.dll` and
-the per-release `dxmd-thread-fix-v<VERSION>-headers.txt` published
+the per-release `dxmd-thread-fix-v<VERSION>-imports.txt` published
 alongside the zip on the GitHub release page):
 
 | Category | Examples | Why it's needed |
