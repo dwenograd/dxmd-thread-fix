@@ -116,10 +116,11 @@ What you should **not** see (and won't):
   absent; never overwritten if you've customized it.
 - `dxgi.dll` — copied into `retail\`.
 - `dxgi.dll.bak-YYYYMMDD-HHMMSS-fff-<4 hex>` — created only if you pass `-Force`
-  AND `retail\dxgi.dll` already exists AND it isn't ours AND there
-  isn't an existing backup. Saves the prior (foreign-mod) DLL so
-  `uninstall.ps1` can restore it. The millisecond + random suffix
-  guards against name collision under concurrent install runs.
+  AND `retail\dxgi.dll` already exists AND it isn't ours AND its bytes
+  don't already match an existing backup. Saves the prior (foreign-mod)
+  DLL so `uninstall.ps1` can restore the user's original pre-DTF DLL
+  (the oldest backup). The millisecond + random suffix guards against
+  name collision under concurrent install runs.
 - `._dtf_writetest_<guid>.tmp` — a transient small file (4 bytes,
   the literal string `test`) written and immediately deleted to test
   that `retail\` is writable.
@@ -286,8 +287,10 @@ The script:
   VERSIONINFO ProductName (so upgrades between DTF versions are silent).
 - Refuses to overwrite an existing `dxgi.dll` from a different mod
   unless you pass `-Force` (in which case it backs the prior one up
-  ONCE — never overwriting an existing backup, so the original
-  pre-DTF state stays preserved).
+  with a timestamped name, skipping backup creation only if the
+  current foreign DLL's bytes already match an existing backup —
+  the original pre-DTF state always stays preserved as the oldest
+  backup).
 - Refuses to install if DXMD is currently running.
 - Refuses to install if it can't write to `retail\` (e.g. game in
   Program Files without admin).

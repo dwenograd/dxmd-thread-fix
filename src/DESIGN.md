@@ -65,8 +65,12 @@ that our hooks are in place before `GetSystemInfo` is ever called.
 
 ### What "being dxgi.dll" requires
 
-DXMD has 20 entries in its import table for `dxgi.dll`. The loader
-will resolve all 20 through us. We MUST:
+Our proxy exports the 20 dxgi exports captured from System32 dxgi.dll
+(`src/dxgi.def`). DXMD imports a subset of these via its IAT;
+middleware and tooling (PIX, AMD AGS, etc.) may resolve others by
+name or ordinal at runtime via `GetProcAddress`. We preserve the
+full observed export set so anything that worked against the real
+dxgi.dll still works against our proxy. We MUST:
 - Export the same 20 names with the same ordinals (`src/dxgi.def`).
 - For each export, forward the call to the real System32 dxgi.dll
   without disturbing arguments, return values, or registers.

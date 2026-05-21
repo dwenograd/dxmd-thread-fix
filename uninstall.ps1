@@ -202,6 +202,14 @@ if ($restoreFrom) {
     # Copy the oldest backup over the active DLL. -Force ensures we
     # overwrite (the file is the dxmd-thread-fix DLL we just verified
     # by VERSIONINFO identity check above; this is what we want).
+    #
+    # Same caveat as install.ps1: Copy-Item is not atomic. If the
+    # restore is interrupted, dxgi.dll could be left partially
+    # written. The user's recovery path in that case is to keep the
+    # remaining .bak files (we delete them BELOW only after a
+    # successful restore call) and manually copy one over dxgi.dll
+    # by hand. (We don't implement atomic-rename for v1.0 — see the
+    # note in install.ps1.)
     Copy-Item -LiteralPath $restoreFrom.File.FullName -Destination $dll -Force
     Write-Host "Restored pre-dxmd-thread-fix dxgi.dll from oldest backup:" -ForegroundColor Yellow
     Write-Host "  $($restoreFrom.File.Name)  (stamp $($restoreFrom.Stamp.ToString('s')))" -ForegroundColor Yellow

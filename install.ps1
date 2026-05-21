@@ -9,10 +9,15 @@
 # Behavior:
 #   - No existing dxgi.dll        -> install our DLL.
 #   - Existing dxgi.dll is ours   -> overwrite silently (upgrade/reinstall).
-#   - Existing dxgi.dll is FOREIGN -> refuse unless -Force. With -Force,
-#     create a timestamped backup ONLY IF no backup already exists. The
-#     first backup is sacred — it's the user's original pre-DTF state
-#     (e.g. ReShade) — and we never overwrite it on subsequent upgrades.
+#   - Existing dxgi.dll is FOREIGN -> refuse unless -Force. With -Force:
+#     SHA-256 the current foreign dxgi.dll, compare to each existing
+#     backup. If no backup already contains the same bytes, create a
+#     new timestamped backup. Existing backups are NEVER deleted by
+#     install.ps1 — the user's original pre-DTF state stays as the
+#     oldest backup. (Uninstall.ps1 restores that oldest backup and
+#     deletes all backups in retail/; if the user needs to recover
+#     an intermediate foreign DLL captured in an additional backup,
+#     they must do that MANUALLY before running uninstall.ps1.)
 #
 # Usage:
 #   pwsh -File install.ps1
@@ -20,7 +25,8 @@
 #   pwsh -File install.ps1 -Game "X:\Path\To\Deus Ex Mankind Divided"
 #       (manual path, for non-Steam or unusual installs)
 #   pwsh -File install.ps1 -Force
-#       (overwrite a foreign dxgi.dll, backing it up if not already)
+#       (overwrite a foreign dxgi.dll, backing it up if its bytes
+#       don't already match an existing backup)
 
 param(
     [string]$Game,
@@ -290,7 +296,19 @@ if (Test-Path -LiteralPath $existingDxgi) {
 }
 
 # -- Install ------------------------------------------------------------
-
+#
+# Copy-Item -Force is not a transactional atomic-replace primitive
+# under PowerShell. If this copy is interrupted (process kill,
+# antivirus race, disk full, etc.) the destination dxgi.dll could
+# be left in a partially-written state. The recovery path for that
+# case is the .bak file we just created (above) — re-run install.ps1
+# (it will detect a foreign DLL again and re-back-it-up if needed)
+# or manually restore the .bak. We do NOT implement
+# write-to-temp + atomic-rename for v1.0 because (1) Copy-Item over
+# a ~155 KB file is fast enough that the interrupt window is small,
+# (2) the .bak provides a real recovery path, and (3) the extra
+# code adds complexity that itself has failure modes. See the
+# corresponding note in uninstall.ps1's restore step.
 Copy-Item -LiteralPath $dll -Destination (Join-Path $retail 'dxgi.dll') -Force
 # Don't clobber an existing INI - user may have customized LogicalProcessors.
 $dstIni = Join-Path $retail 'dxmd-thread-fix.ini'

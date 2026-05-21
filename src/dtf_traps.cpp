@@ -112,6 +112,27 @@
 // stay live for exports the host's Windows version doesn't provide
 // (rare; mostly Win10+ exports on Win7/8). In that case, the caller
 // gets the typed failure return — debuggable, expected, not a crash.
+//
+// =====================================================================
+// Why these generic-return traps are safe in this codebase
+// (and wouldn't be in a 32-bit stdcall proxy)
+// =====================================================================
+//
+// This project is x64-only (/MACHINE:X64, see build.ps1; dxgi.def
+// declares 64-bit ordinals; the asm stubs use rax/rcx-style 64-bit
+// registers). Under the Windows x64 calling convention, the caller
+// allocates and reclaims the shadow space and all stack arguments;
+// the callee is responsible only for non-volatile registers (which
+// these traps don't touch). So a trap with the "wrong" parameter
+// count or shape still leaves the caller's stack and volatile
+// registers in a state the caller already expected.
+//
+// On 32-bit stdcall (used by older Win32 DLLs), the CALLEE is
+// expected to clean up the stack with `ret <bytes>`. A trap with
+// the wrong signature would leave the stack imbalanced and crash
+// the process on return. If anyone ever ports this idea to a
+// 32-bit proxy DLL, they'd need to match each trap's calling
+// convention and argument-count to its export exactly.
 
 #include <windows.h>
 
