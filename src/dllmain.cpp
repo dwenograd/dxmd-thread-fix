@@ -117,15 +117,38 @@ static bool ieq_ascii(const wchar_t* a, const wchar_t* b) {
 }
 
 // Returns true if the current process executable's basename is "DXMD.exe".
+//
+// On extremely long install paths (longer than MAX_PATH wchars), the
+// fixed-size buffer here can't hold the path. Rather than fail closed
+// (which would silently skip CPU hooks and leave the user with a
+// crashing game and no obvious clue), we grow the buffer dynamically
+// in a small retry loop. This is the same shape as the recommended
+// GetModuleFileNameW pattern in MSDN.
 static bool host_is_dxmd() {
-    wchar_t path[MAX_PATH];
-    DWORD n = GetModuleFileNameW(nullptr, path, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) return false;
+    DWORD bufLen = MAX_PATH;
+    wchar_t* path = nullptr;
+    DWORD n = 0;
+    for (int attempt = 0; attempt < 4; ++attempt) {
+        wchar_t* newPath = static_cast<wchar_t*>(
+            HeapReAlloc(GetProcessHeap(), 0, path, bufLen * sizeof(wchar_t)));
+        if (!newPath) newPath = static_cast<wchar_t*>(
+            HeapAlloc(GetProcessHeap(), 0, bufLen * sizeof(wchar_t)));
+        if (!newPath) { if (path) HeapFree(GetProcessHeap(), 0, path); return false; }
+        path = newPath;
+        n = GetModuleFileNameW(nullptr, path, bufLen);
+        if (n == 0) { HeapFree(GetProcessHeap(), 0, path); return false; }
+        if (n < bufLen) break;  // success (n is the length, not buffer size)
+        // n == bufLen means truncation; double and retry.
+        bufLen *= 2;
+        if (bufLen > 32768) { HeapFree(GetProcessHeap(), 0, path); return false; }
+    }
     const wchar_t* base = path;
     for (DWORD i = 0; i < n; ++i) {
         if (path[i] == L'\\' || path[i] == L'/') base = &path[i + 1];
     }
-    return ieq_ascii(base, L"DXMD.exe");
+    bool result = ieq_ascii(base, L"DXMD.exe");
+    HeapFree(GetProcessHeap(), 0, path);
+    return result;
 }
 
 // Returns BOOL for DllMain. Sets g_fix_active as a side effect.

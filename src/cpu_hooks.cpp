@@ -11,12 +11,19 @@ namespace dtf {
 // --- Trampolines (set by MinHook on successful hook install) -----------
 //
 // We hook each API at exactly one address: the one returned by
-// GetProcAddress, which follows the kernel32 -> apiset -> KernelBase
-// forwarder chain and lands at the real implementation. IAT-resolved
-// callers in DXMD.exe, bink2w64.dll, and amd_ags64.dll all wind up with
-// pointers to that same address in their IAT slots (the loader follows
-// forwarders during import resolution), so hooking that one body catches
-// every caller regardless of which module they statically imported from.
+// GetProcAddress(kernel32, ...). For some APIs this is the real
+// implementation in kernel32; for others it's a forwarder/stub that
+// chains through apiset to KernelBase. Either way, this is the
+// address that IAT-resolved callers in DXMD.exe, bink2w64.dll, and
+// amd_ags64.dll get written into their IAT slots by the loader (the
+// loader follows forwarders during import resolution).
+//
+// LIMITATION: callers that import DIRECTLY from KernelBase.dll (rather
+// than from kernel32) and resolve to a distinct address there would
+// bypass this hook. In practice the DXMD binary and middleware all
+// import only from KERNEL32.dll, so this is not an issue for our use
+// case. Future versions may add explicit KernelBase coverage if a
+// real-world bypass is observed.
 
 using PFN_GetSystemInfo                 = void      (WINAPI*)(LPSYSTEM_INFO);
 using PFN_GetNativeSystemInfo           = void      (WINAPI*)(LPSYSTEM_INFO);

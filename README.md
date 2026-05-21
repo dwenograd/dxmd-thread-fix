@@ -406,7 +406,7 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
 - **Steam overlay** — fine. Steam hooks the D3D swapchain VTable after
   swapchain creation, which is orthogonal to our static-import proxy.
 - **NVIDIA / AMD GPUs** — both. No driver-specific behavior.
-- **Windows 10, Windows 11** — both.
+- **Windows 11** — primary test platform.
 - **Threadripper 3970X (32C/64T)** — primary test platform, fix
   developed against this hardware.
 
@@ -445,7 +445,7 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
 | | Status |
 |---|---|
 | DXMD build | Tested on 1.19.801.0 (final 2017 patch). The DLL does NOT enforce this at runtime; other builds may work but are untested. |
-| OS | Windows 10, Windows 11 — tested. Windows 7 SP1 / 8.1 — theoretically supported (the build targets Win7 SP1 minimum) but untested. |
+| OS | Windows 11 — tested. Windows 10 — expected to work (the DLL imports nothing Windows-10-specific) but not specifically validated this release. Windows 7 SP1 / 8.1 — build targets that baseline but neither tested. |
 | Architecture | x64 — the only one DXMD ships in |
 | CPU | Any x86-64 CPU. The fix is most useful at 16+ logical processors but is harmless on smaller CPUs. |
 
@@ -485,9 +485,13 @@ Fixes (in order of preference):
    on the GitHub release page. If it matches, you have the genuine
    article — your AV is a false positive.
 2. **Add an exception** for the `retail\` folder in your AV.
-3. **For Smart App Control on Windows 11**: open Windows Security →
-   App & browser control → Smart App Control → Off. (You can turn it
-   back on after testing, then re-allow the DLL specifically.)
+3. **For Smart App Control on Windows 11**: prefer adding a Defender
+   allow rule for `dxgi.dll` (Windows Security → Virus & threat
+   protection → Manage settings → Exclusions). **Do not** turn Smart
+   App Control off as a workaround — on Windows 11, once SAC is turned
+   off it cannot be re-enabled without resetting or reinstalling
+   Windows. If you must disable a check, exclude this specific file by
+   path after verifying its SHA-256 against the GitHub release.
 
 ### Mark-of-the-Web blocks the PowerShell scripts
 
@@ -730,7 +734,7 @@ dxmd-thread-fix/
 │   ├── topology.h
 │   ├── config.cpp            INI parsing via GetPrivateProfileIntW
 │   ├── config.h
-│   ├── log.cpp               Thread-safe append-only file logger
+│   ├── log.cpp               Thread-safe file logger (truncate on start, then append per line)
 │   ├── log.h
 │   └── version.rc            Embedded VERSIONINFO resource
 ├── third_party/

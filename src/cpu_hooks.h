@@ -5,13 +5,21 @@
 // topology.h.
 //
 // Hook target resolution: for each API, we call GetProcAddress on
-// kernel32.dll (falling back to KernelBase.dll if missing). On modern
-// Windows, kernel32's GetProcAddress follows the apiset/forwarder chain
-// and returns the address of the actual implementation in KernelBase.
-// Static-import callers in DXMD/bink/amd_ags get the same forwarder-
-// followed address written into their IAT slots by the loader. So
-// hooking that one address catches every caller regardless of which
-// module they imported from.
+// kernel32.dll (falling back to KernelBase.dll if missing). For some
+// APIs this returns the kernel32 implementation directly; for others
+// it follows a forwarder chain through the apiset DLLs to the actual
+// KernelBase implementation. Either way, callers that resolve the
+// same symbol via kernel32 (whether by static import or runtime
+// GetProcAddress) end up with the same address that we hook, so they
+// hit our detour.
+//
+// LIMITATION: a caller that imports DIRECTLY from `KernelBase.dll`
+// (rather than through `kernel32.dll`) and lands on a distinct
+// implementation address would bypass this hook. In practice, the
+// DXMD game binary and all its bundled middleware (verified via
+// dumpbin /imports) only import from KERNEL32.dll, so this limitation
+// doesn't apply to the target use case. Future v1.x may add
+// dedicated KernelBase coverage if a real-world need surfaces.
 //
 // The 6 topology APIs (GetSystemInfo, GetNativeSystemInfo,
 // GetActive/MaxProcessorCount, GetActive/MaxProcessorGroupCount) are

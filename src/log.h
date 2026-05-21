@@ -1,4 +1,9 @@
-// log.h - append-only, thread-safe logger writing next to the DLL.
+// log.h - thread-safe file logger writing next to the DLL.
+//
+// Behavior: at process startup, log_open() truncates the log file (if
+// LogLevel > 0); each subsequent log_line() appends one line under a
+// critical section. Each line opens the file, writes, and closes it,
+// so writes survive crashes.
 //
 // Log levels:
 //   0 = silent. No log file is created on disk. log_line() is a no-op.
