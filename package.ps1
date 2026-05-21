@@ -113,6 +113,7 @@ $inZipSha = Join-Path $stage 'SHA256SUMS.txt'
 #      PowerShell `>` would otherwise produce on 5.1).
 
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$dumpbinArtifactsGenerated = $false
 if (Test-Path -LiteralPath $vswhere) {
     $vs = & $vswhere -latest -property installationPath
     $dumpbin = Get-ChildItem -LiteralPath "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
@@ -134,6 +135,7 @@ if (Test-Path -LiteralPath $vswhere) {
         Write-Host "  $headersFile" -ForegroundColor DarkGray
         Write-Host "  $exportsFile" -ForegroundColor DarkGray
         Write-Host "  $importsFile" -ForegroundColor DarkGray
+        $dumpbinArtifactsGenerated = $true
     } else {
         Write-Host "WARN: dumpbin not found; skipping headers/exports/imports text generation." -ForegroundColor Yellow
     }
@@ -205,9 +207,18 @@ Write-Host "  dxgi.dll SHA-256: ``$dllHash``"
 Write-Host ""
 Write-Host "Provenance artifacts (alongside the zip on this release page):"
 Write-Host "  - ``dxmd-thread-fix-v$Version-SHA256SUMS.txt`` (per-file manifest, coreutils-compatible)"
-Write-Host "  - ``dxmd-thread-fix-v$Version-headers.txt`` (dumpbin /headers output)"
-Write-Host "  - ``dxmd-thread-fix-v$Version-exports.txt`` (dumpbin /exports output)"
-Write-Host "  - ``dxmd-thread-fix-v$Version-imports.txt`` (dumpbin /imports output)"
+if ($dumpbinArtifactsGenerated) {
+    Write-Host "  - ``dxmd-thread-fix-v$Version-headers.txt`` (dumpbin /headers output)"
+    Write-Host "  - ``dxmd-thread-fix-v$Version-exports.txt`` (dumpbin /exports output)"
+    Write-Host "  - ``dxmd-thread-fix-v$Version-imports.txt`` (dumpbin /imports output)"
+} else {
+    Write-Host ""
+    Write-Host "  NOTE: dumpbin headers/exports/imports artifacts were NOT generated on this run" -ForegroundColor Yellow
+    Write-Host "  (Visual Studio dumpbin.exe not found). Re-run on a machine with Visual Studio" -ForegroundColor Yellow
+    Write-Host "  installed if you want to ship the provenance text files. The release zip and" -ForegroundColor Yellow
+    Write-Host "  SHA256SUMS manifest were generated correctly and are ready to publish, but" -ForegroundColor Yellow
+    Write-Host "  the GitHub release page won't have the .txt PE-inspection artifacts." -ForegroundColor Yellow
+}
 Write-Host ""
 Write-Host "Verify locally:"
 Write-Host '  Verify the zip BEFORE extracting (PowerShell):'

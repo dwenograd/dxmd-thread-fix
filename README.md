@@ -40,9 +40,11 @@ what to verify before you decide:
 ### Reading the source
 
 Everything is in the GitHub repository
-(<https://github.com/dwenograd/dxmd-thread-fix>). The total size is
-~1,300 lines of our own code, plus ~76 KB of [MinHook][mh] source for
-the hook installation (MinHook is vendored unmodified in
+(<https://github.com/dwenograd/dxmd-thread-fix>). The source under
+`src/` is ~2,200 lines, the bulk of which is explanatory comments
+written for security-curious readers (the actual machine code is
+small). Plus ~76 KB of [MinHook][mh] source for the hook
+installation (MinHook is vendored unmodified in
 `third_party/minhook/` — see
 [`PROVENANCE.md`](third_party/minhook/PROVENANCE.md)). The files that
 matter:
@@ -53,12 +55,12 @@ matter:
 > in GitHub's auto-generated source archives for each tag. The source
 > file links below point at the repo.
 
-- [`src/dllmain.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dllmain.cpp) — entry point, ~200 lines
-- [`src/dtf_traps.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dtf_traps.cpp) — pre-resolve trap functions, ~110 lines
-- [`src/dxgi_exports.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dxgi_exports.cpp) — proxy plumbing, ~100 lines
+- [`src/dllmain.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dllmain.cpp) — entry point and attach orchestration
+- [`src/dtf_traps.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dtf_traps.cpp) — pre-resolve trap functions
+- [`src/dxgi_exports.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dxgi_exports.cpp) — proxy plumbing
 - [`src/dxgi_stubs.asm`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dxgi_stubs.asm) — 20 tail-jump stubs
-- [`src/cpu_hooks.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/cpu_hooks.cpp) — the actual API hooks, ~300 lines
-- [`src/topology.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/topology.cpp) — fake CPU topology state, ~85 lines
+- [`src/cpu_hooks.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/cpu_hooks.cpp) — the actual API hooks
+- [`src/topology.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/topology.cpp) — fake CPU topology state
 - [`src/config.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/config.cpp), [`src/log.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/log.cpp) — config & log
 
 [mh]: https://github.com/TsudaKageyu/minhook

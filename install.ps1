@@ -81,6 +81,19 @@ If you downloaded a release zip: make sure dxgi.dll is in the same folder as ins
 }
 $ini  = Join-Path $root 'dxmd-thread-fix.ini'
 
+# Preflight: confirm both source files exist before touching retail\.
+# Without this check, a partially-extracted release zip or malformed
+# source tree could let us back up / overwrite retail\dxgi.dll and
+# then fail at the INI copy below — leaving the user with a confusing
+# "DLL replaced but installer reported failure" state. We'd rather
+# fail BEFORE touching anything.
+if (-not (Test-Path -LiteralPath $dll)) {
+    throw "Source dxgi.dll not found at: $dll`n`nThis usually means the release zip was extracted incompletely, or this script is being run from outside the project layout it expects. Extract the full release zip into a single folder and run install.ps1 from there."
+}
+if (-not (Test-Path -LiteralPath $ini)) {
+    throw "Source dxmd-thread-fix.ini not found at: $ini`n`nThis usually means the release zip was extracted incompletely, or this script is being run from outside the project layout it expects. Extract the full release zip into a single folder and run install.ps1 from there."
+}
+
 # -- Identity helper: is a given dxgi.dll "ours"? -----------------------
 
 function Test-IsOurs {

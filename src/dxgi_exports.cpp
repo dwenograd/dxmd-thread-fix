@@ -110,9 +110,18 @@ extern "C" HRESULT WINAPI dtf_trap_HRESULT_HANDLE(HANDLE);
 // output pointer and crash. So:
 //
 //   - dtf_trap_pre_resolve: generic, returns 0 in RAX. Used for the
-//     compat-namespace exports apphelp actually calls, plus
-//     undocumented private exports where 0 happens to be a safe
-//     default.
+//     compat-namespace exports apphelp actually calls, plus the
+//     undocumented private dxgi exports (PIX*, DXGID3D10*, etc.)
+//     where we don't have a published signature to model. 0 isn't
+//     guaranteed semantically safe for those — if any of them is
+//     HRESULT-shaped, 0 would mean S_OK and a downstream caller
+//     could deref an uninitialized out-pointer. In practice these
+//     exports exist on every supported Windows version, so they
+//     resolve to real System32 dxgi addresses at runtime and the
+//     trap is dead code. The trap exists only as a last-resort
+//     "the host's Windows doesn't have this export AND something
+//     called it anyway" path, where the alternative would be a
+//     null-pointer crash.
 //   - dtf_trap_CreateDXGIFactory (REFIID, void**): zeros the out-pointer
 //     and returns DXGI_ERROR_NOT_FOUND. Used for CreateDXGIFactory and
 //     CreateDXGIFactory1.
