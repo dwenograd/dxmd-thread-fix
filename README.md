@@ -416,7 +416,11 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
 - **Steam version of DXMD** (the only place this has been tested).
 - **Steam overlay** — fine. Steam hooks the D3D swapchain VTable after
   swapchain creation, which is orthogonal to our static-import proxy.
-- **NVIDIA / AMD GPUs** — both. No driver-specific behavior.
+- **NVIDIA GPUs** — tested on RTX 4090. The fix is in
+  GetSystemInfo/GetActiveProcessorCount hook code, not in any
+  GPU-specific path, so there's no plausible reason it would
+  behave differently on AMD or Intel; but AMD/Intel were not
+  specifically validated for this release.
 - **Windows 11** — primary test platform.
 - **Threadripper 3970X (32C/64T)** — primary test platform, fix
   developed against this hardware.
