@@ -18,9 +18,10 @@
 ; pfn_FOO is GUARANTEED non-null by the compile-time initializers in
 ; dxgi_exports.cpp. The traps return:
 ;   - generic exports: 0 (S_OK / nullptr / FALSE - safe for compat-pass)
-;   - CreateDXGIFactory*: DXGI_ERROR_NOT_FOUND with the out-pointer zeroed
-;   - DXGIDeclareAdapterRemovalSupport / DXGIDisableVBlankVirtualization:
-;     DXGI_ERROR_NOT_FOUND
+;   - CreateDXGIFactory{,1,2} / DXGIGetDebugInterface1: zero out-pointer
+;     and return DXGI_ERROR_NOT_FOUND
+;   - DXGIDeclareAdapterRemovalSupport: DXGI_ERROR_NOT_FOUND
+;   - DXGIDisableVBlankVirtualization: DXGI_ERROR_NOT_FOUND (typed HANDLE trap)
 ;
 ; This means: even if our DLL loads but real System32 dxgi can't be
 ; resolved, the game receives clean error codes from factory APIs

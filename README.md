@@ -40,39 +40,50 @@ what to verify before you decide:
 ### Reading the source
 
 Everything is in this repo. The total size is ~1,300 lines of our own
-code, plus ~95 KB of [MinHook][mh] for the hook installation. The
-files that matter:
+code, plus ~76 KB of [MinHook][mh] source for the hook installation
+(MinHook is vendored unmodified in `third_party/minhook/` — see
+[`PROVENANCE.md`](third_party/minhook/PROVENANCE.md)). The files that
+matter:
 
-- [`src/dllmain.cpp`](src/dllmain.cpp) — entry point, ~190 lines
-- [`src/dtf_traps.cpp`](src/dtf_traps.cpp) — pre-resolve trap functions, ~100 lines
+- [`src/dllmain.cpp`](src/dllmain.cpp) — entry point, ~200 lines
+- [`src/dtf_traps.cpp`](src/dtf_traps.cpp) — pre-resolve trap functions, ~110 lines
 - [`src/dxgi_exports.cpp`](src/dxgi_exports.cpp) — proxy plumbing, ~100 lines
 - [`src/dxgi_stubs.asm`](src/dxgi_stubs.asm) — 20 tail-jump stubs
-- [`src/cpu_hooks.cpp`](src/cpu_hooks.cpp) — the actual API hooks, ~290 lines
-- [`src/topology.cpp`](src/topology.cpp) — fake CPU topology state, ~75 lines
+- [`src/cpu_hooks.cpp`](src/cpu_hooks.cpp) — the actual API hooks, ~300 lines
+- [`src/topology.cpp`](src/topology.cpp) — fake CPU topology state, ~85 lines
 - [`src/config.cpp`](src/config.cpp), [`src/log.cpp`](src/log.cpp) — config & log
 
 [mh]: https://github.com/TsudaKageyu/minhook
 
 ### What the DLL is *allowed* to do (and what it isn't)
 
-Imports tell you what a DLL can possibly do. Ours imports **only
-`KERNEL32.dll`** — no networking, no registry writes, no process
-creation, no shell execution. You can verify this yourself:
+Imports are a useful first check, not a complete proof — a DLL can
+dynamically expand its behavior with `LoadLibrary` + `GetProcAddress`,
+so the import table alone doesn't *prove* what the DLL does at runtime.
+The full proof is in reading the source (which is small enough to skim
+in 20 minutes). But imports are a strong first signal, and ours
+imports **only `KERNEL32.dll`**. You can verify this yourself:
 
 ```powershell
 dumpbin.exe /imports dxgi.dll
 ```
 
-You'll see APIs from these categories:
+You'll see APIs from these categories (this list IS complete — every
+imported kernel32 symbol falls into one of these buckets):
 
 | Category | Examples | Why it's needed |
 |---|---|---|
-| File I/O | `CreateFileW`, `WriteFile` | Reading `dxmd-thread-fix.ini`, writing `dxmd-thread-fix.log` |
-| Module loading | `LoadLibraryExW`, `GetProcAddress`, `GetModuleHandleW` | Loading the real `System32\dxgi.dll` to forward calls |
-| Synchronization | `InitializeCriticalSection`, `EnterCriticalSection` | Thread-safe log writes |
-| Code patching | `VirtualProtect`, `FlushInstructionCache` | Required by MinHook to install API hooks |
-| Thread management | `SuspendThread`, `ResumeThread`, `GetThreadContext` | Required by MinHook to safely patch code under other threads |
-| Exception/CRT | `IsDebuggerPresent`, `SetUnhandledExceptionFilter` | Brought in by MSVC's static C runtime; not used by our code |
+| File I/O | `CreateFileW`, `WriteFile`, `GetPrivateProfileIntW` | Reading `dxmd-thread-fix.ini`, writing `dxmd-thread-fix.log` |
+| Module loading | `LoadLibraryExW`, `GetProcAddress`, `GetModuleHandleW`, `GetModuleFileNameW`, `GetSystemDirectoryW` | Loading the real `System32\dxgi.dll` (one absolute path; see code) |
+| Synchronization | `InitializeCriticalSection`, `EnterCriticalSection`, `LeaveCriticalSection`, `DeleteCriticalSection`, `InterlockedCompareExchange` | Thread-safe log writes and first-hit flags |
+| Code patching | `VirtualProtect`, `FlushInstructionCache`, `VirtualAlloc`, `VirtualFree` | Required by MinHook to install API hooks in our process |
+| Thread management | `SuspendThread`, `ResumeThread`, `GetThreadContext`, `SetThreadContext`, `OpenThread`, `CreateToolhelp32Snapshot`, `Thread32First`, `Thread32Next` | Required by MinHook to safely patch code under other threads in our process |
+| Exception/CRT plumbing | `IsDebuggerPresent`, `SetUnhandledExceptionFilter`, `TerminateProcess`, `RaiseException`, `GetCurrentProcess`, exception/unwind helpers | Brought in by MSVC's static C runtime (`/MT`); not used by our code |
+| Heap/string | `HeapAlloc`, `HeapFree`, `GetLastError`, `lstrlen*`, etc. | Used by MinHook and the static CRT |
+
+The only *dynamic* DLL load our code does is `LoadLibraryExW` of a
+hard-coded absolute path: `C:\Windows\System32\dxgi.dll`. See
+[`src/dxgi_exports.cpp`](src/dxgi_exports.cpp). No other dynamic loads.
 
 What you should **not** see (and won't):
 
@@ -80,23 +91,44 @@ What you should **not** see (and won't):
 - Anything from `advapi32.RegCreateKey*`, `Reg*Value*` (no registry writes)
 - Anything from `kernel32.CreateProcess*`, `shell32.ShellExecute*` (no process launching)
 
-### What it writes to disk
+### What gets written to disk
 
-Exactly two files, both in the `retail\` folder next to `DXMD.exe`:
+**By the DLL at runtime (in `<game>\retail\`):**
+- `dxmd-thread-fix.log` — diagnostic log of the current run, opened (and
+  truncated) once at DLL load, then appended to. **Not created at all
+  if `LogLevel=0`.** If an old log exists from a previous run, we
+  truncate it; we never delete it.
 
-- `dxmd-thread-fix.log` — diagnostic log of this run (overwritten each launch)
-- `dxmd-thread-fix.ini` — your config (only if absent; never clobbered)
+**By `install.ps1`:**
+- `dxmd-thread-fix.ini` — copied from this repo into `retail\` if
+  absent; never overwritten if you've customized it.
+- `dxgi.dll` — copied into `retail\`.
+- `dxgi.dll.bak-YYYYMMDD-HHMMSS` — created only if you pass `-Force`
+  AND `retail\dxgi.dll` already exists AND it isn't ours AND there
+  isn't an existing backup. Saves the prior (foreign-mod) DLL so
+  `uninstall.ps1` can restore it.
 
-Nothing in `Documents/`, nothing in `%APPDATA%`, no registry keys, no
-network requests. Your saves, your `PSOCache.bin`, your Steam Cloud,
-your achievements — all untouched.
+**By `uninstall.ps1`:**
+- Removes the three files install.ps1 created (the DLL, INI, and log)
+  if they're recognizably ours.
+- Restores the oldest `dxgi.dll.bak-*` (the original pre-DTF state)
+  back to `dxgi.dll`, then deletes all backups.
 
-### Reproducible build
+Nothing else. No `Documents/`, no `%APPDATA%`, no registry writes, no
+network. Your saves, your `PSOCache.bin`, your Steam Cloud, your
+achievements — all untouched throughout.
+
+`install.ps1` and `uninstall.ps1` **read** Steam's registry install
+path (`HKCU:\Software\Valve\Steam\SteamPath` and the WOW6432 LM hive)
+for auto-detection of the game folder. They write nothing to the
+registry.
+
+### Reproducible-ish build
 
 The full build is one PowerShell script:
 
 ```powershell
-pwsh -File build.ps1
+powershell.exe -ExecutionPolicy Bypass -File build.ps1
 ```
 
 The output is `dist\dxgi.dll`. The script prints the SHA-256 at the
@@ -187,10 +219,13 @@ it prevents accidental activation in unrelated apps.
 
 Three steps:
 
-1. Download the latest release from [Releases](#) (the zip contains
-   `dxgi.dll`, `dxmd-thread-fix.ini`, this README, and a SHA-256 manifest).
+1. Download the latest release from
+   [Releases](https://github.com/dwenograd/dxmd-thread-fix/releases)
+   (the zip contains `dxgi.dll` and `dxmd-thread-fix.ini`; the release
+   page lists the SHA-256 of the DLL).
 2. **Right-click the zip → Properties → check "Unblock"** before
-   extracting, otherwise Windows may block the extracted files.
+   extracting, otherwise Windows may block the extracted files
+   (Mark-of-the-Web).
 3. Drop `dxgi.dll` and `dxmd-thread-fix.ini` into the game's `retail\`
    subfolder, next to `DXMD.exe`. Typical Steam paths:
    - `C:\Program Files (x86)\Steam\steamapps\common\Deus Ex Mankind Divided\retail\`
@@ -202,19 +237,29 @@ That's it. Launch DXMD through Steam normally. Verify it engaged
 ### Scripted install (optional)
 
 If you cloned the source repo, `install.ps1` does it for you and can
-auto-detect the Steam install location:
+auto-detect the Steam install location. The scripts work in both
+Windows PowerShell 5.1 (which ships with Windows) and PowerShell 7
+(`pwsh`):
 
 ```powershell
+# Stock Windows (5.1):
+powershell.exe -ExecutionPolicy Bypass -File install.ps1
+# Or with explicit path:
+powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Game "C:\Games\Deus Ex Mankind Divided"
+
+# Or, if you have PowerShell 7 installed:
 pwsh -File install.ps1
-# or with explicit path:
-pwsh -File install.ps1 -Game "C:\Games\Deus Ex Mankind Divided"
 ```
 
 The script:
+- Recognizes an existing `dxgi.dll` as "ours" via its embedded
+  VERSIONINFO ProductName (so upgrades between DTF versions are silent).
 - Refuses to overwrite an existing `dxgi.dll` from a different mod
-  unless you pass `-Force` (in which case it backs the prior one up).
+  unless you pass `-Force` (in which case it backs the prior one up
+  ONCE — never overwriting an existing backup, so the original
+  pre-DTF state stays preserved).
 - Refuses to install if DXMD is currently running.
-- Refuses to install if it can't write to `retail\` (e.g., game in
+- Refuses to install if it can't write to `retail\` (e.g. game in
   Program Files without admin).
 - Preserves your `dxmd-thread-fix.ini` if you've already customized it.
 
@@ -264,17 +309,24 @@ If you don't see a log file at all, see
 If you used `install.ps1`:
 
 ```powershell
+powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1
+# Or with PowerShell 7:
 pwsh -File uninstall.ps1
 ```
 
 It will:
-- Refuse to delete `dxgi.dll` if its SHA-256 doesn't match our build
-  (so it won't clobber ReShade/Special K if you installed those after).
-- Restore the most recent backup (if one exists from `install -Force`).
-- Clean up the `dxmd-thread-fix.log`.
+- Identify `retail\dxgi.dll` as "ours" via its embedded VERSIONINFO
+  ProductName (`dxmd-thread-fix`). If it's not ours, the script
+  refuses to delete it — you'd have to pass `-DeleteForeignDxgi` to
+  explicitly override (don't unless you know what you're doing).
+- Restore the OLDEST backup (the original pre-DTF state — e.g., the
+  ReShade `dxgi.dll` that was there before you installed DTF), then
+  clean up all backup files.
+- Remove `dxmd-thread-fix.ini` and `dxmd-thread-fix.log`.
 
 If you installed manually, just delete:
-- `<game>\retail\dxgi.dll` (only if it's ours; check with `(Get-Item dxgi.dll).VersionInfo.ProductName` — should say "dxmd-thread-fix")
+- `<game>\retail\dxgi.dll` (only if it's ours; check with
+  `(Get-Item dxgi.dll).VersionInfo.ProductName` — should say "dxmd-thread-fix")
 - `<game>\retail\dxmd-thread-fix.ini`
 - `<game>\retail\dxmd-thread-fix.log`
 
@@ -332,15 +384,13 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
   (we clamp our reported count downward to your real count).
 - **Larger CPUs (96C/192T+)** — the topology hooks return a
   single-group, 8-CPU view, so should work.
-- **HDR via Special K** — Special K also uses a `dxgi.dll` proxy and
-  will conflict. See below.
 
 ### Known conflicts
 
 | Other mod | Conflict | Workaround |
 |---|---|---|
 | ReShade (configured as `dxgi.dll` proxy) | Both want to be `dxgi.dll`. | Configure ReShade as `d3d11.dll` proxy instead. |
-| Special K | Both proxy `dxgi.dll`. | No good workaround currently. A future v1.1 may add a `winmm.dll` alt-proxy mode. |
+| Special K | Both proxy `dxgi.dll`. Special K's HDR retrofit specifically requires its dxgi proxy. | No good workaround currently — use one or the other. A future v1.1 may add a `winmm.dll` alt-proxy mode. |
 | ENBSeries | Both proxy `dxgi.dll`. | Use only one. |
 
 ### Not supported
@@ -351,13 +401,15 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
   by a crack patcher.
 - **DXMD demo / older patches** — only build `1.19.801.0` (the final
   2017 patch) has been tested. Earlier patches may differ in import
-  table layout.
+  table layout. The DLL itself does NOT runtime-check the DXMD build
+  version, so it'll still try to install on other builds; the only
+  enforced check is that the host EXE is named `DXMD.exe`.
 
 ### Supported platforms
 
 | | Status |
 |---|---|
-| DXMD build | 1.19.801.0 (final 2017 patch) — required |
+| DXMD build | Tested on 1.19.801.0 (final 2017 patch). The DLL does NOT enforce this at runtime; other builds may work but are untested. |
 | OS | Windows 10, Windows 11 — tested. Windows 7 SP1 / 8.1 — theoretically supported (the build targets Win7 SP1 minimum) but untested. |
 | Architecture | x64 — the only one DXMD ships in |
 | CPU | Any x86-64 CPU. The fix is most useful at 16+ logical processors but is harmless on smaller CPUs. |
@@ -369,10 +421,13 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
 ### No log file at all
 
 If `dxmd-thread-fix.log` doesn't appear in `retail\` after launching
-the game, our DLL didn't load. Most common causes:
+the game, our DLL didn't load (or didn't get far enough to open the
+log). Most common causes:
 
-1. **`LogLevel=0`** in the INI — we don't create a log file in silent
-   mode. Change to `LogLevel=1` and relaunch.
+1. **`LogLevel=0`** in the INI — we never create a log file in silent
+   mode. (If you set it to 0 *after* having had logging on, an old
+   log file may remain from a previous run; we don't delete it,
+   but we won't update it either.) Change to `LogLevel=1` and relaunch.
 2. **DLL not in `retail\`** — you put it in the wrong folder.
    `dxgi.dll` must be next to `DXMD.exe`, not next to the launcher or
    in the parent `Deus Ex Mankind Divided\` folder.
@@ -460,10 +515,9 @@ to run with our shim installed.
 
 ### Game update through Steam
 
-DXMD hasn't been updated since 2017 and Eidos Montréal no longer
-exists, so this is unlikely. If it ever happens and Steam adds its own
-`dxgi.dll` to `retail\`, ours will be overwritten — just reinstall
-the mod.
+DXMD hasn't been updated since 2017, so this is unlikely. If it ever
+happens and Steam adds its own `dxgi.dll` to `retail\`, ours will be
+overwritten — just reinstall the mod.
 
 ---
 
@@ -568,26 +622,31 @@ might still crash).
 ### Build
 
 ```powershell
-git clone https://github.com/<owner>/dxmd-thread-fix.git
+git clone https://github.com/dwenograd/dxmd-thread-fix.git
 cd dxmd-thread-fix
+powershell.exe -ExecutionPolicy Bypass -File build.ps1
+# Or, if you have PowerShell 7 installed:
 pwsh -File build.ps1
 ```
 
 Output:
 - `dist\dxgi.dll` — ~150 KB. The artifact you'd install or distribute.
-- `dist\dxgi.pdb` — debug symbols (Release build still produces them).
+
+(The Release build currently does NOT emit a PDB. If you want symbols
+for debugging, edit `build.ps1` to add `/Zi` to the cl flags and
+`/DEBUG` to the link flags.)
 
 The script prints the SHA-256 of the built DLL at the end. Self-builds
-are not expected to match the SHA-256 of official releases byte-for-byte
-(MSVC embeds machine-specific data into PE files). What you can verify
-is the export table:
+are NOT expected to match the SHA-256 of official releases byte-for-byte —
+MSVC embeds timestamps, GUIDs, and absolute paths into PE files that
+differ between machines. What you CAN verify identically is:
 
-```powershell
-dumpbin /exports dist\dxgi.dll
-```
-
-— it should show exactly the same 20 names and ordinals as
-`C:\Windows\System32\dxgi.dll`.
+- The export table (`dumpbin /exports dist\dxgi.dll`) — exactly 20
+  names + ordinals matching `C:\Windows\System32\dxgi.dll`.
+- The import table (`dumpbin /imports dist\dxgi.dll`) — only
+  `KERNEL32.dll`.
+- The embedded VERSIONINFO `ProductName` (`(Get-Item dist\dxgi.dll).VersionInfo.ProductName`)
+  should be `dxmd-thread-fix`.
 
 ### Build flags
 
@@ -604,14 +663,16 @@ The Release build uses:
 ### Install (for testing)
 
 ```powershell
+powershell.exe -ExecutionPolicy Bypass -File install.ps1
+# Or with PowerShell 7:
 pwsh -File install.ps1
-# or
-pwsh -File install.ps1 -Game "C:\Path\To\Deus Ex Mankind Divided"
 ```
 
 ### Uninstall
 
 ```powershell
+powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1
+# Or with PowerShell 7:
 pwsh -File uninstall.ps1
 ```
 
@@ -687,5 +748,5 @@ This project vendors MinHook (BSD-2-Clause). See
 - The **Steam Community, /r/Deusex, and PCGamingWiki** threads that
   have been trading affinity workarounds for this crash since 2017.
 - **Eidos Montréal** for one of the best immersive sims ever made,
-  even if they shipped it with this bug. It's a shame the studio is
-  gone; this game deserved more sequels.
+  even if they shipped it with this bug. DXMD hasn't seen an update
+  since 2017, which is why this fix exists.

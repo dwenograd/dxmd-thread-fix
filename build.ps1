@@ -66,6 +66,9 @@ $build = Join-Path $root 'build'
 $dist  = Join-Path $root 'dist'
 New-Item -ItemType Directory -Path $build -Force | Out-Null
 New-Item -ItemType Directory -Path $dist  -Force | Out-Null
+# Don't leave stale logs from prior smoke tests in dist/ - they'd ship
+# in any release zip made by zipping dist/.
+Remove-Item -LiteralPath (Join-Path $dist 'dxmd-thread-fix.log') -Force -ErrorAction SilentlyContinue
 
 # -- Sources -------------------------------------------------------------
 

@@ -321,6 +321,12 @@ fail:
     // MinHook was already initialized when we entered, someone else
     // owns it and we leave it alone.)
     if (we_initialized_mh) {
+        // We initialized MinHook ourselves in this call, so we own the
+        // cleanup. (If MH_Initialize returned ALREADY_INITIALIZED at
+        // entry, MinHook had been initialized by an earlier call to
+        // this function or by some other code in the process. Either
+        // way we should NOT call MH_Uninitialize on a state we don't
+        // own.)
         MH_Uninitialize();
     }
     return -1;

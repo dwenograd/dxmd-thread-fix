@@ -15,7 +15,7 @@
 #define DTF_FILE_DESC       "DXGI proxy that hooks CPU-discovery APIs to fix DXMD's high-core-CPU crash"
 #define DTF_INTERNAL_NAME   "dxgi.dll"
 #define DTF_ORIGINAL_NAME   "dxgi.dll"
-#define DTF_COPYRIGHT       "MIT licensed. See https://github.com/<owner>/dxmd-thread-fix"
+#define DTF_COPYRIGHT       "MIT licensed. See https://github.com/dwenograd/dxmd-thread-fix"
 #define DTF_COMMENTS        "Not affiliated with Eidos, Square Enix, or Microsoft. Proxies the system dxgi.dll and installs MinHook detours on 6 CPU-topology APIs."
 
 VS_VERSION_INFO VERSIONINFO

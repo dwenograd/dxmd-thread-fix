@@ -138,8 +138,21 @@ if (Test-Path -LiteralPath $log) {
 
 # -- Restore the OLDEST backup (= pre-DTF original) and clean up --------
 
-$backups = @(Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTime)
+$backups = @(Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue)
+# Sort by the timestamp embedded in the filename (dxgi.dll.bak-YYYYMMDD-HHMMSS),
+# NOT by LastWriteTime. Copy-Item preserves the source DLL's modification
+# timestamp, so the file's LastWriteTime reflects when the *original* DLL
+# was built, not when WE made the backup. The filename's timestamp suffix
+# is authoritative for "which backup was made first."
+$backups = $backups | Sort-Object -Property @{
+    Expression = {
+        if ($_.Name -match 'dxgi\.dll\.bak-(\d{8}-\d{6})$') {
+            [datetime]::ParseExact($matches[1], 'yyyyMMdd-HHmmss', $null)
+        } else {
+            $_.CreationTime  # fallback for unparseable names
+        }
+    }
+}
 if ($backups.Count -gt 0) {
     $oldest = $backups[0]
     Copy-Item -LiteralPath $oldest.FullName -Destination $dll -Force

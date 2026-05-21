@@ -84,9 +84,20 @@ dtf_trap_CreateDXGIFactory2(UINT /*Flags*/, REFIID /*riid*/, void** ppFactory) {
 }
 
 // DXGIDeclareAdapterRemovalSupport(void) -> HRESULT
-// DXGIDisableVBlankVirtualization(void) -> HRESULT
 
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_HRESULT_void(void) {
+    return DXGI_ERROR_NOT_FOUND;
+}
+
+// DXGIDisableVBlankVirtualization(HANDLE hAdapter) -> HRESULT
+//
+// This signature is undocumented; based on community reverse-engineering
+// the parameter is a DXGI adapter handle. We declare it correctly so
+// the compiler can't infer anything wrong about register usage; the
+// implementation ignores the handle and returns failure.
+
+extern "C" __declspec(noinline) HRESULT WINAPI
+dtf_trap_HRESULT_HANDLE(HANDLE /*hAdapter*/) {
     return DXGI_ERROR_NOT_FOUND;
 }

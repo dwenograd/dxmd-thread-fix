@@ -11,8 +11,8 @@
 ## How we obtained it
 
 ```powershell
-Invoke-WebRequest \
-  -Uri "https://github.com/TsudaKageyu/minhook/archive/refs/tags/v1.3.3.zip" \
+Invoke-WebRequest `
+  -Uri "https://github.com/TsudaKageyu/minhook/archive/refs/tags/v1.3.3.zip" `
   -OutFile minhook.zip
 # Extracted contents of `minhook-1.3.3/` placed verbatim in this directory.
 ```
@@ -38,14 +38,18 @@ and diffing the result.
 
 ## What our code calls
 
-The full list of MinHook API calls our code makes:
+The full list of MinHook API calls our code makes (all in
+`src/cpu_hooks.cpp`):
 
-- `MH_Initialize()` — once, in `install_cpu_hooks()` (cpu_hooks.cpp)
-- `MH_CreateHook()` — once per hook target (cpu_hooks.cpp)
-- `MH_EnableHook(MH_ALL_HOOKS)` — once after all hooks created (cpu_hooks.cpp)
-- `MH_RemoveHook()` — on individual targets if install partially fails (cpu_hooks.cpp)
-- `MH_DisableHook(MH_ALL_HOOKS)` — once, on explicit DLL unload (cpu_hooks.cpp)
-- `MH_Uninitialize()` — once, on explicit DLL unload (cpu_hooks.cpp)
+- `MH_Initialize()` — on hook install
+- `MH_CreateHook()` — once per hook target
+- `MH_EnableHook(MH_ALL_HOOKS)` — once after all hooks created
+- `MH_DisableHook(MH_ALL_HOOKS)` — on enable-time failure (best-effort)
+  and on explicit DLL unload
+- `MH_RemoveHook()` — on individual targets when tearing down a
+  partially-completed install, or on install-time failures
+- `MH_Uninitialize()` — on explicit DLL unload, or on install failure
+  if WE called `MH_Initialize()` during the current install attempt
 
 No other entry points used. No private/undocumented MinHook internals
 touched.
