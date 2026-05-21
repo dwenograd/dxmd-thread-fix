@@ -94,7 +94,7 @@ alongside the zip on the GitHub release page):
 The only *dynamic* DLL load our code does is `LoadLibraryExW` of the
 absolute system-directory path resolved by `GetSystemDirectoryW()` —
 normally `C:\Windows\System32\dxgi.dll` but correctly handles non-`C:`
-Windows installs. See [`src/dxgi_exports.cpp`](src/dxgi_exports.cpp).
+Windows installs. See [`src/dxgi_exports.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dxgi_exports.cpp).
 No other dynamic loads.
 
 What you should **not** see (and won't):
@@ -159,16 +159,19 @@ indicator. What you *can* verify identically is:
 
 For each official release we publish on the GitHub release page:
 
-- The git commit tag
-- The release zip (`dxmd-thread-fix-v<VERSION>.zip`) and its SHA-256
+- The git commit tag (`vX.Y.Z`).
+- The release zip (`dxmd-thread-fix-v<VERSION>.zip`) and its SHA-256,
+  plus the SHA-256 of `dxgi.dll` itself.
 - A per-file SHA-256 manifest (`dxmd-thread-fix-v<VERSION>-SHA256SUMS.txt`)
-  covering everything inside the zip. This same manifest also ships
-  *inside* the zip as `SHA256SUMS.txt` so you can verify locally
-  without re-downloading.
-- The `dumpbin /headers` and `/exports` output as text files
-  (`dxmd-thread-fix-v<VERSION>-headers.txt` and `-exports.txt`)
-  so you can inspect the PE characteristics and export table without
-  needing dumpbin installed.
+  covering every non-manifest file inside the zip. The manifest is
+  strict coreutils format, so you can verify with `sha256sum -c
+  SHA256SUMS.txt` on Linux/macOS/Git-for-Windows. This same manifest
+  also ships *inside* the zip as `SHA256SUMS.txt` so you can verify
+  locally without re-downloading.
+- The `dumpbin /headers`, `/exports`, and `/imports` output as text
+  files (`dxmd-thread-fix-v<VERSION>-headers.txt`, `-exports.txt`,
+  `-imports.txt`) so you can inspect the PE characteristics, export
+  table, and import surface without needing dumpbin installed.
 
 If a third party publishes a `dxgi.dll` *claiming* to be ours, hash it
 against the GitHub release. If it doesn't match — don't run it.
@@ -261,14 +264,15 @@ That's it. Launch DXMD through Steam normally. Verify it engaged
 ### Scripted install (optional)
 
 If you extracted the release zip or cloned the source repo, `install.ps1`
-does it for you and can auto-detect the Steam install location. The
-scripts work in both Windows PowerShell 5.1 (which ships with Windows)
-and PowerShell 7 (`pwsh`):
+does it for you and can auto-detect the Steam install location. Open
+PowerShell, `cd` into the folder where you extracted the zip (or where
+you cloned the source repo), then run one of:
 
 ```powershell
-# Stock Windows (5.1):
+# Stock Windows (PowerShell 5.1 ships with Windows):
+cd path\to\extracted\dxmd-thread-fix
 powershell.exe -ExecutionPolicy Bypass -File install.ps1
-# Or with explicit path:
+# Or with explicit game path:
 powershell.exe -ExecutionPolicy Bypass -File install.ps1 -Game "C:\Games\Deus Ex Mankind Divided"
 
 # Or, if you have PowerShell 7 installed:
@@ -620,7 +624,7 @@ all good"), and the loader proceeds to run our DllMain, which
 overwrites the trap pointers with the real System32 dxgi addresses.
 
 This is exactly the issue the first attempt at this mod tripped on,
-and is documented at length in [`src/dtf_traps.cpp`](src/dtf_traps.cpp).
+and is documented at length in [`src/dtf_traps.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dtf_traps.cpp).
 
 ### Why we hook 6 APIs, not just `GetSystemInfo`
 

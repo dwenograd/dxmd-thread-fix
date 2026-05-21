@@ -74,34 +74,42 @@ Copy-Item -LiteralPath (Join-Path $root 'third_party\minhook\PROVENANCE.md')  -D
 # -- Compute hashes for the manifest -----------------------------------
 
 Write-Host "=== Hashing release contents ===" -ForegroundColor Cyan
-$manifest = @()
-$manifest += "# SHA-256 hashes for dxmd-thread-fix v$Version"
-$manifest += "# Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
-$manifest += "#"
-$manifest += "# This manifest does NOT include its own hash (would be circular)."
-$manifest += "# The hash of SHA256SUMS.txt itself is published on the GitHub release page."
-$manifest += ""
+# Manifest is strict coreutils-format: pure `<sha256><two spaces><path>`
+# lines, LF endings, ASCII, no comments. So `sha256sum -c SHA256SUMS.txt`
+# works on Linux/macOS/Git-for-Windows without warnings. Explanatory
+# notes (including "this manifest excludes its own hash") live in the
+# README and the GitHub release page, NOT in the manifest itself.
+$manifestLines = @()
 Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
     $rel  = $_.FullName.Substring($stage.Length + 1).Replace('\', '/')
-    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
-    $manifest += "$hash  $rel"
+    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifestLines += "$hash  $rel"
     Write-Host "  $hash  $rel" -ForegroundColor DarkGray
 }
+$manifestText = ($manifestLines -join "`n") + "`n"
 
+# Write with LF endings, no BOM. .NET WriteAllBytes lets us control
+# encoding precisely; Set-Content / Out-File default to CRLF on Windows.
 $shaFile = Join-Path $release "dxmd-thread-fix-v$Version-SHA256SUMS.txt"
-Set-Content -LiteralPath $shaFile -Value ($manifest -join "`r`n") -Encoding ASCII
+[System.IO.File]::WriteAllBytes($shaFile, [System.Text.Encoding]::ASCII.GetBytes($manifestText))
 
 # Also copy the manifest INTO the staging folder so it ships in the zip.
-# Users get a single zip with everything they need to verify integrity
-# locally, not "DLL here, hashes on a separate web page somewhere."
+# Same strict format. The manifest does not include its own hash; that
+# fact is documented in README, not in the manifest (so consumers can
+# pipe it directly into `sha256sum -c`).
 $inZipSha = Join-Path $stage 'SHA256SUMS.txt'
-Set-Content -LiteralPath $inZipSha -Value ($manifest -join "`r`n") -Encoding ASCII
+[System.IO.File]::WriteAllBytes($inZipSha, [System.Text.Encoding]::ASCII.GetBytes($manifestText))
 
 # -- Generate dumpbin artifacts (alongside the zip, not inside) ---------
 #
 # README's trust section promises these so suspicious users can inspect
-# the DLL's PE headers and exports without having dumpbin installed.
-# We locate dumpbin via vswhere, same pattern as build.ps1.
+# the DLL's PE headers, exports, and imports without having dumpbin
+# installed. We:
+#   1. cd into dist/ so the output paths are bare "dxgi.dll", not
+#      the absolute K:\... build path (a leak that prior reviewers
+#      flagged for the public release).
+#   2. Capture stdout and write it as ASCII (no UTF-16 BOM that
+#      PowerShell `>` would otherwise produce on 5.1).
 
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 if (Test-Path -LiteralPath $vswhere) {
@@ -112,15 +120,24 @@ if (Test-Path -LiteralPath $vswhere) {
         Write-Host "=== Generating dumpbin artifacts ===" -ForegroundColor Cyan
         $headersFile = Join-Path $release "dxmd-thread-fix-v$Version-headers.txt"
         $exportsFile = Join-Path $release "dxmd-thread-fix-v$Version-exports.txt"
-        & $dumpbin.FullName /headers $dll > $headersFile
-        & $dumpbin.FullName /exports $dll > $exportsFile
+        $importsFile = Join-Path $release "dxmd-thread-fix-v$Version-imports.txt"
+        Push-Location -LiteralPath $dist
+        try {
+            $headersText = & $dumpbin.FullName /headers 'dxgi.dll' | Out-String
+            $exportsText = & $dumpbin.FullName /exports 'dxgi.dll' | Out-String
+            $importsText = & $dumpbin.FullName /imports 'dxgi.dll' | Out-String
+        } finally { Pop-Location }
+        [System.IO.File]::WriteAllBytes($headersFile, [System.Text.Encoding]::ASCII.GetBytes($headersText))
+        [System.IO.File]::WriteAllBytes($exportsFile, [System.Text.Encoding]::ASCII.GetBytes($exportsText))
+        [System.IO.File]::WriteAllBytes($importsFile, [System.Text.Encoding]::ASCII.GetBytes($importsText))
         Write-Host "  $headersFile" -ForegroundColor DarkGray
         Write-Host "  $exportsFile" -ForegroundColor DarkGray
+        Write-Host "  $importsFile" -ForegroundColor DarkGray
     } else {
-        Write-Host "WARN: dumpbin not found; skipping headers/exports text generation." -ForegroundColor Yellow
+        Write-Host "WARN: dumpbin not found; skipping headers/exports/imports text generation." -ForegroundColor Yellow
     }
 } else {
-    Write-Host "WARN: vswhere not found; skipping headers/exports text generation." -ForegroundColor Yellow
+    Write-Host "WARN: vswhere not found; skipping headers/exports/imports text generation." -ForegroundColor Yellow
 }
 
 # -- Build the zip -----------------------------------------------------
@@ -129,29 +146,59 @@ $zip = Join-Path $release "dxmd-thread-fix-v$Version.zip"
 if (Test-Path -LiteralPath $zip) { Remove-Item -LiteralPath $zip -Force }
 
 Write-Host "=== Creating $zip ===" -ForegroundColor Cyan
-# Compress-Archive with -LiteralPath + a mixed array of files and a
-# directory has quirky behavior in PS 5.1 (silently drops top-level
-# files in some cases). Use the .NET API directly for predictable results.
+# Build the zip manually so we control:
+#  - entry name normalization (forward slashes for nested paths, per
+#    standard zip practice and what `tar -tf` etc. expect)
+#  - compression level
+#  - file ordering (sorted by relative path for reproducibility)
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory(
-    $stage, $zip,
-    [IO.Compression.CompressionLevel]::Optimal,
-    $false)   # do NOT include the staging folder name as a top-level entry
+$zipStream = [System.IO.File]::Create($zip)
+$archive   = [System.IO.Compression.ZipArchive]::new($zipStream, [System.IO.Compression.ZipArchiveMode]::Create)
+try {
+    Get-ChildItem -LiteralPath $stage -Recurse -File |
+        Sort-Object { $_.FullName.Substring($stage.Length + 1).Replace('\', '/') } |
+        ForEach-Object {
+            $rel   = $_.FullName.Substring($stage.Length + 1).Replace('\', '/')
+            $entry = $archive.CreateEntry($rel, [System.IO.Compression.CompressionLevel]::Optimal)
+            $entryStream = $entry.Open()
+            $srcStream   = [System.IO.File]::OpenRead($_.FullName)
+            try   { $srcStream.CopyTo($entryStream) }
+            finally {
+                $srcStream.Close()
+                $entryStream.Close()
+            }
+        }
+} finally {
+    $archive.Dispose()
+    $zipStream.Dispose()
+}
 
 $zipHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+$dllHash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
 
 Write-Host ""
 Write-Host "BUILD OK" -ForegroundColor Green
-Write-Host "  Zip:       $zip"
+Write-Host "  Zip:         $zip"
 Write-Host "  Zip SHA-256: $zipHash"
-Write-Host "  Manifest:  $shaFile"
+Write-Host "  DLL SHA-256: $dllHash"
+Write-Host "  Manifest:    $shaFile"
 Write-Host ""
 Write-Host "Release-page text:" -ForegroundColor Cyan
 Write-Host "---"
 Write-Host "**dxmd-thread-fix v$Version**"
 Write-Host ""
 Write-Host "Download: ``dxmd-thread-fix-v$Version.zip``"
-Write-Host "SHA-256:   ``$zipHash``"
+Write-Host "  zip SHA-256:    ``$zipHash``"
+Write-Host "  dxgi.dll SHA-256: ``$dllHash``"
 Write-Host ""
-Write-Host "Per-file hashes: ``dxmd-thread-fix-v$Version-SHA256SUMS.txt``"
+Write-Host "Provenance artifacts (alongside the zip on this release page):"
+Write-Host "  - ``dxmd-thread-fix-v$Version-SHA256SUMS.txt`` (per-file manifest, coreutils-compatible)"
+Write-Host "  - ``dxmd-thread-fix-v$Version-headers.txt`` (dumpbin /headers output)"
+Write-Host "  - ``dxmd-thread-fix-v$Version-exports.txt`` (dumpbin /exports output)"
+Write-Host "  - ``dxmd-thread-fix-v$Version-imports.txt`` (dumpbin /imports output)"
+Write-Host ""
+Write-Host "Verify locally:"
+Write-Host '  PowerShell:  (Get-FileHash .\dxgi.dll -Algorithm SHA256).Hash'
+Write-Host '  Linux/macOS: sha256sum -c SHA256SUMS.txt   (manifest is in the zip)'
 Write-Host "---"
