@@ -205,12 +205,15 @@ static DWORD_PTR WINAPI Hooked_SetThreadAffinityMask(HANDLE hThread, DWORD_PTR m
     //     intersection (honors caller intent within our fake set).
     //   - If the requested mask had NO overlap with allowed (caller
     //     wanted ONLY high-numbered CPUs we lied about), fall back to
-    //     `allowed`. Passing 0 instead would cause the API to FAIL,
-    //     which middleware almost universally treats as fatal — the
-    //     thread either won't start or will run on whatever default
-    //     mask the OS picks. Better to honor the spirit of the call
-    //     by giving the thread SOMETHING runnable within our fake
-    //     topology.
+    //     `allowed`. Passing 0 instead would cause
+    //     SetThreadAffinityMask to return 0 (failure) and leave the
+    //     thread's previous affinity unchanged. Middleware that
+    //     checks the return value would treat that as fatal; the
+    //     thread either continues on whatever affinity it already
+    //     had (which could be outside our fake topology, leaving
+    //     the system in the inconsistent state we were trying to
+    //     fix) or aborts. Better to honor the spirit of the call
+    //     by giving the thread an affinity within our fake set.
     //
     // WHY OPT-IN BY DEFAULT: in practice, all our in-game testing on
     // a 32C/64T Threadripper showed DXMD never asks for an affinity
@@ -380,10 +383,12 @@ int install_cpu_hooks(bool clamp_affinity) {
             if (spec.always_install) {
                 // A required topology API isn't exported by kernel32 on
                 // this Windows. Shouldn't happen on any supported
-                // Windows version (these have all been kernel32 exports
-                // since Windows XP). Refuse to half-install — see the
-                // "all-or-nothing required set" rationale in the file
-                // header.
+                // Windows version (these are all part of the
+                // processor-group APIs that have been kernel32 exports
+                // since Windows 7, matching our Win7 SP1 build
+                // baseline _WIN32_WINNT=0x0601). Refuse to half-install
+                // — see the "all-or-nothing required set" rationale in
+                // the file header.
                 log_line("ERROR: required API %s not exported on this Windows; aborting hook install.",
                          spec.api_name);
                 goto fail;

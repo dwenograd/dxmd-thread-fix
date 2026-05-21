@@ -19,7 +19,8 @@
 //   - log_set_level(level) is called after config is parsed. If level
 //     > 0, this opens (and truncates) the log file for the first time.
 //   - log_line() takes the critical section, opens-appends-closes the
-//     file for each call (so writes are durable and survive crashes).
+//     file for each call (so writes survive a process crash — the
+//     line is committed to the OS file handle before the next call).
 //
 // Thread safety: log_line() takes a critical section per call.
 // log_init_*, log_set_level, log_open, log_shutdown are intended to be

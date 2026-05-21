@@ -296,9 +296,12 @@ and host detection on deeply-nested installs. Now everything scales.
 
 `log_line()` opens the file, writes one line, closes the file —
 every time. That's slower than holding it open, but means every
-line is durable on disk the moment it's written. If the game
-crashes immediately after `FIX STATUS: ACTIVE`, that line is in
-the log.
+line is committed to the OS file handle the moment it's written
+and survives a process crash. (We don't `FlushFileBuffers`, so
+this isn't power-loss durable — but the threat is "DXMD crashed
+mid-game", not "PC lost power", and crash-survival is sufficient.)
+If the game crashes immediately after `FIX STATUS: ACTIVE`, that
+line is in the log.
 
 The startup-truncate-then-append pattern means each game run
 overwrites the prior log. So "send me your log" from a support

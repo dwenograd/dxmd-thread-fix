@@ -8,8 +8,10 @@
 //      If level > 0, this opens (and truncates) the log file.
 //   3. log_line(fmt, ...) writes a single timestamped line, taking the
 //      critical section for thread safety. Each call opens-writes-closes
-//      the file, so writes are durable on disk even if the game crashes
-//      immediately after a log call.
+//      the file, so writes survive a game crash (the line is committed
+//      to the OS file handle before the next log call runs; we don't
+//      call FlushFileBuffers, so this is crash-safe but not power-loss-safe
+//      — see log.cpp's log_line for the full rationale).
 //   4. log_shutdown() (called on explicit FreeLibrary, not at process
 //      exit) tears down the critical section and frees the heap path.
 //
@@ -160,9 +162,14 @@ void log_line(const char* fmt, ...) {
     // 1. Durability. The entire reason this DLL exists is that DXMD
     //    crashes. If our log doesn't flush before the crash, the most
     //    important lines (FIX STATUS, last hooked call before crash)
-    //    are lost. CreateFile+Write+CloseHandle means each line is on
-    //    disk before the next one runs. No buffered-writes lost-on-
-    //    crash window.
+    //    are lost. CreateFile+Write+CloseHandle means each line is
+    //    committed to the OS file handle (and thus visible to
+    //    whoever opens the file next) before the next line runs.
+    //    The line survives a process crash. (It does NOT guarantee
+    //    physical-disk durability against power loss — we don't
+    //    call FlushFileBuffers — but the threat we're protecting
+    //    against is "DXMD crashed mid-game", not "the user yanked
+    //    the power cord", and crash-survival is all we need.)
     //
     // 2. File sharing. If a curious user (or our own install script)
     //    opens the log file in Notepad while the game is running, a
