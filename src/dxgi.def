@@ -1,18 +1,33 @@
 ; dxgi.def - exact name + ordinal preservation for our proxy dxgi.dll.
 ;
-; What we export: the 20 dxgi-namespace exports captured from
-; `dumpbin /exports C:\Windows\System32\dxgi.dll` on Windows 10/11.
-; This is intentionally the System32-dxgi export set that DXMD AND
-; its middleware (PIX, AMD AGS, etc.) might resolve through us — not
-; just the strict subset DXMD itself imports via its IAT. The extra
-; entries cover middleware that does runtime GetProcAddress on dxgi
-; exports by name or ordinal.
+; What we export: the 20 dxgi-namespace exports captured from the
+; Windows 10 / early-Windows-11-era System32 dxgi.dll export set
+; (`dumpbin /exports C:\Windows\System32\dxgi.dll`). This covers
+; DXMD's static dxgi imports plus middleware (PIX, AMD AGS, etc.)
+; that resolve dxgi exports at runtime via GetProcAddress.
 ;
-; Ordinals here match the System32 dxgi capture exactly so any
+; What we DO NOT export: newer Windows versions add additional
+; dxgi exports as the API evolves — e.g., Windows 11 ships a
+; `fothk` export at ordinal 1000 not present in the older capture.
+; We deliberately do not mirror these for two reasons:
+;   1. Their signatures are undocumented. Shipping a stub with a
+;      guessed calling convention or argument count is worse than
+;      not shipping it — a wrong-shape stub could corrupt the
+;      caller's stack on return.
+;   2. DXMD shipped in 2016 with middleware from that era. None of
+;      it uses Windows 11-era exports.
+; A caller that imports an export we don't expose will see
+; GetProcAddress return NULL through our proxy (where it would
+; have succeeded against real System32 dxgi). For DXMD this never
+; happens. For arbitrary other apps that try to use our DLL as a
+; general-purpose dxgi proxy (which is NOT a supported use case),
+; some calls would fail. See README's compatibility-matrix section.
+;
+; Ordinals here match the captured System32 dxgi exactly so any
 ; caller resolving by ordinal still gets the right function through
 ; our proxy (verified to match across our test installs).
 ;
-; On older Windows (Win7 SP1 / Win 8.1) some of these exports may
+; On older Windows (Win7 SP1 / Win 8.1) some of these 20 exports may
 ; be missing from the host's System32 dxgi entirely; for those
 ; slots, the per-export pfn_FOO stays pointing at its compile-time
 ; trap (see src/dtf_traps.cpp). That degrades a missing-export call

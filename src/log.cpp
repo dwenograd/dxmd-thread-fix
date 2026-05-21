@@ -107,10 +107,20 @@ void log_init_deferred(HMODULE self) {
 // mode would let the file grow indefinitely across runs, which is bad
 // for both disk space and for the user's ability to find "what
 // happened in this run" (they'd have to scroll past months of history).
+//
+// We use the SAME permissive sharing flags as log_line() below
+// (FILE_SHARE_READ | FILE_SHARE_WRITE). If we used the stricter
+// FILE_SHARE_READ here, a user who had the prior session's log file
+// open in a permissive editor (notepad++, vscode, etc.) could cause
+// our truncation to silently fail — and then log_line() would
+// succeed-append onto the prior session's stale lines, mixing two
+// game sessions in one file. Permissive sharing here makes
+// truncation succeed even when the file is open elsewhere.
 void log_open() {
     if (!g_inited) return;
     if (!g_log_path || g_log_path[0] == 0) return;
-    HANDLE h = CreateFileW(g_log_path, GENERIC_WRITE, FILE_SHARE_READ,
+    HANDLE h = CreateFileW(g_log_path, GENERIC_WRITE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h != INVALID_HANDLE_VALUE) CloseHandle(h);
 }

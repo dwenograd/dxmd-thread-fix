@@ -98,6 +98,16 @@ void set_topology(WORD desired) {
     }
     // Single fake group means dwActiveProcessorMask must fit in 64 bits.
     if (clamped > 64) clamped = 64;
+    // Re-apply the at-least-1 floor AFTER the real-count cap. On a
+    // healthy supported Windows, real_logical_processors is always
+    // >= 1, so this is unreachable. But under Wine, Proton, custom
+    // emulation layers, or broken/hostile GetActiveProcessorCount
+    // hooks, real_total could come back as 0. Without this guard,
+    // clamped = min(desired, 0) = 0 → first_n_bits_mask(0) returns 0
+    // → every reported affinity mask is zero, and the game's thread
+    // pools spin forever waiting for "any CPU" to be available. A
+    // 1-CPU fake topology is degraded but functional; 0 is broken.
+    if (clamped < 1) clamped = 1;
 
     g_topology.logical_processors = clamped;
     g_topology.groups             = 1;
