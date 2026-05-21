@@ -1,0 +1,22 @@
+# Build outputs
+build/
+*.obj
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.log
+
+# Distributable artifacts (rebuilt by build.ps1)
+dist/dxgi.dll
+dist/*.log
+
+# Editor/IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Misc
+Thumbs.db
+desktop.ini

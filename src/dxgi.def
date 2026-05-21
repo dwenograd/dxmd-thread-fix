@@ -1,0 +1,32 @@
+; dxgi.def - exact name + ordinal preservation for our proxy dxgi.dll.
+;
+; Ordinals here MUST match the System32 dxgi.dll on Windows 10+. They
+; were captured via `dumpbin /exports C:\Windows\System32\dxgi.dll`.
+; Any caller that resolves dxgi exports by ordinal (rare but it happens
+; in some graphics tooling) gets the right function.
+;
+; Each export's implementation is the same-named symbol in dxgi_stubs.asm,
+; which tail-jumps to the runtime-resolved real-dxgi pointer.
+
+LIBRARY dxgi
+EXPORTS
+    ApplyCompatResolutionQuirking      @1
+    CompatString                       @2
+    CompatValue                        @3
+    DXGIDumpJournal                    @4
+    PIXBeginCapture                    @5
+    PIXEndCapture                      @6
+    PIXGetCaptureState                 @7
+    SetAppCompatStringPointer          @8
+    UpdateHMDEmulationStatus           @9
+    CreateDXGIFactory                  @10
+    CreateDXGIFactory1                 @11
+    CreateDXGIFactory2                 @12
+    DXGID3D10CreateDevice              @13
+    DXGID3D10CreateLayeredDevice       @14
+    DXGID3D10GetLayeredDeviceSize      @15
+    DXGID3D10RegisterLayers            @16
+    DXGIDeclareAdapterRemovalSupport   @17
+    DXGIDisableVBlankVirtualization    @18
+    DXGIGetDebugInterface1             @19
+    DXGIReportAdapterConfiguration     @20
