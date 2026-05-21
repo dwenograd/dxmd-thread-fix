@@ -12,8 +12,8 @@
 
 #include <winver.h>
 
-#define DTF_VERSION         1, 1, 0, 0
-#define DTF_VERSION_STR     "1.1.0.0"
+#define DTF_VERSION         1, 1, 1, 0
+#define DTF_VERSION_STR     "1.1.1.0"
 #define DTF_COMPANY         "dxmd-thread-fix"
 #define DTF_PRODUCT         "dxmd-thread-fix"
 #define DTF_DESC            "Thread-count crash fix for Deus Ex: Mankind Divided"

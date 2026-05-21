@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented here.
 
+## v1.1.1 (2026-05-21)
+
+Comment-cleanup pass over the v1.1.0 source. No code changes,
+no behaviour changes, no ABI changes — same 20 exports, same
+ordinals, same import surface. Trimmed roughly 15 lines of
+commentary that restated obvious code or general x64/Windows
+knowledge.
+
+If you have v1.1.0 working, there's no reason to update.
+
 ## v1.1.0 (2026-05-21)
 
 ### Drop-in DLL, no INI, no installer scripts

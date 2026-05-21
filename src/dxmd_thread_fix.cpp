@@ -3,7 +3,7 @@
 // What this DLL does: proxies dxgi.dll for DXMD.exe and installs
 // MinHook detours on 6 CPU-topology APIs so the game sees 8 logical
 // processors instead of the host's real count (which crashes the game
-// on high-core CPUs). See docs/THEORY.md for the full story.
+// on high-core CPUs). See docs/DESIGN.md for the architectural story.
 //
 // Source layout: the entire fix is in this one file plus three
 // non-C++ siblings the toolchain requires separately:
@@ -58,10 +58,6 @@
 // functions with identical bodies (e.g. dtf_trap_HRESULT_void and
 // dtf_trap_HRESULT_HANDLE) to the same address - functionally fine,
 // just expected when inspecting the binary.
-//
-// These traps are safe under the x64 calling convention because
-// RCX/RDX/R8/R9 are caller-saved volatile registers - the trap can
-// ignore arguments without leaving caller state inconsistent.
 
 extern "C" __declspec(noinline) void* WINAPI dtf_trap_pre_resolve(void) {
     return nullptr;
@@ -89,8 +85,8 @@ dtf_trap_HRESULT_void(void) {
     return DXGI_ERROR_NOT_FOUND;
 }
 
-// DXGIDisableVBlankVirtualization. HANDLE arg is documentation only;
-// under x64 ABI the trap doesn't depend on argument layout.
+// DXGIDisableVBlankVirtualization. HANDLE param is for source readability;
+// the trap ignores it.
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_HRESULT_HANDLE(HANDLE /*hAdapter*/) {
     return DXGI_ERROR_NOT_FOUND;
@@ -215,10 +211,6 @@ static bool wstr_ieq_ascii(const wchar_t* a, const wchar_t* b) {
 // Thread-safe file logger. Each log_line() opens, writes, and closes
 // the file under a critical section so writes survive a process crash.
 // Log lives next to the DLL as dxmd-thread-fix.log.
-//
-// Lifecycle: log_init_deferred() records the file path without opening
-// it. log_set_level() opens (and truncates) the file the first time
-// level transitions from 0 to nonzero.
 
 static CRITICAL_SECTION g_lock;
 static bool             g_lock_inited = false;
@@ -362,7 +354,6 @@ static FakeTopology g_topology;
 
 static const FakeTopology& topology() { return g_topology; }
 
-// DWORD_PTR mask covering the first N bits, saturating at word width.
 static DWORD_PTR first_n_bits_mask(WORD n) {
     if (n == 0) return 0;
     if (n >= sizeof(DWORD_PTR) * 8) return static_cast<DWORD_PTR>(-1);
@@ -862,8 +853,7 @@ static HMODULE g_self = nullptr;
 static HMODULE g_real_dxgi = nullptr;
 static bool    g_fix_active = false;
 
-// Returns true if the host EXE basename is "DXMD.exe". Uses the
-// long-path-safe helper so it works for installs with paths > MAX_PATH.
+// True if the host EXE basename is "DXMD.exe" (case-insensitive).
 static bool host_is_dxmd() {
     wchar_t* path = get_module_path(nullptr);
     if (!path) return false;
@@ -890,8 +880,9 @@ static BOOL attach() {
     log_set_level(kLogLevel);
     log_line("dxmd-thread-fix attach: loaded at module handle %p", g_self);
 
-    // Fixed MAX_PATH buffer here is fine - this is for human-readable
-    // logging only. host_is_dxmd() uses the long-path-safe helper.
+    // MAX_PATH buffer is fine here - host_path is only used for the
+    // log line below; host_is_dxmd() above did the real basename check
+    // via the long-path-safe helper.
     wchar_t host_path[MAX_PATH];
     DWORD host_n = GetModuleFileNameW(nullptr, host_path, MAX_PATH);
     if (host_n > 0 && host_n < MAX_PATH) {
