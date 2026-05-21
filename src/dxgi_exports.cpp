@@ -1,141 +1,28 @@
-// dxgi_exports.cpp - the pfn_FOO globals tail-jumped through by the
-// asm stubs in dxgi_stubs.asm, plus the resolver that overwrites
-// them with real System32 dxgi function pointers at DllMain time.
+// dxgi_exports.cpp - the pfn_FOO globals that the asm stubs in
+// dxgi_stubs.asm tail-jump through, plus the resolver that overwrites
+// them with real System32 dxgi addresses.
 //
-// WHY THE COMPILE-TIME TRAP INITIALIZATION
-// =========================================
-// Every pfn_FOO MUST be a valid function-pointer-shaped value at all
-// times, including BEFORE our DllMain runs. The Windows loader's
-// app-compat shim layer (apphelp.dll) calls some dxgi exports
-// (notably SetAppCompatStringPointer) as part of its compat-fixup
-// pass, and that pass runs BEFORE our entry point.
-//
-// If pfn_FOO were nullptr at that point, the asm stub's
-// `jmp QWORD PTR [pfn_FOO]` would jump to NULL and crash the process
-// before our DllMain ever ran. This is exactly what the first version
-// of this shim did, and it killed every install.
-//
-// Fix: every pfn_FOO is initialized at COMPILE TIME to point at one
-// of the trap functions defined in dtf_traps.cpp. The asm stubs always
-// land on valid code. After our DllMain runs and resolves real System32
-// dxgi addresses, the trap pointers get overwritten with the real ones.
-//
-// See dtf_traps.cpp for the full story and src/DESIGN.md for the
-// architectural narrative.
+// Each pfn_FOO is initialized at COMPILE TIME to a trap function (see
+// dtf_traps.cpp for the full rationale). This is essential because
+// Windows' apphelp compat pass calls some dxgi exports before our
+// DllMain runs; if pfn_FOO were nullptr, the asm stub would jump to
+// address 0 and the process would die pre-DllMain.
 
 #include "dxgi_exports.h"
 #include "log.h"
 
-// Trap functions live in dtf_traps.cpp. Every pfn_FOO slot is
-// initialized at compile time to one of these traps so that the asm
-// stubs in dxgi_stubs.asm never jump through a null pointer — necessary
-// because the Windows loader's app-compat shim layer (apphelp.dll) calls
-// some dxgi exports (notably SetAppCompatStringPointer) BEFORE our
-// DllMain runs. See dtf_traps.cpp's header comment for the full story.
-//
-// Five categories of trap:
-//   - dtf_trap_pre_resolve: generic, returns 0. Safe for compat-pass
-//     exports and any undocumented private export. Most exports use this.
-//   - dtf_trap_CreateDXGIFactory: zeros the (REFIID, void**) out-pointer
-//     and returns DXGI_ERROR_NOT_FOUND. Used for CreateDXGIFactory,
-//     CreateDXGIFactory1.
-//   - dtf_trap_CreateDXGIFactory2: same shape but with the extra Flags
-//     parameter. Used for CreateDXGIFactory2 and DXGIGetDebugInterface1.
-//   - dtf_trap_HRESULT_void: zero-argument, returns DXGI_ERROR_NOT_FOUND.
-//     Used for DXGIDeclareAdapterRemovalSupport.
-//   - dtf_trap_HRESULT_HANDLE: takes a HANDLE adapter argument (signature
-//     community-reverse-engineered; see dtf_traps.cpp), returns
-//     DXGI_ERROR_NOT_FOUND. Used for DXGIDisableVBlankVirtualization.
-//
-// After DllMain runs, every pfn_FOO that the host's System32 dxgi
-// actually exports is overwritten with the real address; only exports
-// missing on the host's Windows version stay pointing at their trap.
+// Traps live in dtf_traps.cpp. See that file for the full story.
 extern "C" void* WINAPI dtf_trap_pre_resolve(void);
 extern "C" HRESULT WINAPI dtf_trap_CreateDXGIFactory(REFIID, void**);
 extern "C" HRESULT WINAPI dtf_trap_CreateDXGIFactory2(UINT, REFIID, void**);
 extern "C" HRESULT WINAPI dtf_trap_HRESULT_void(void);
 extern "C" HRESULT WINAPI dtf_trap_HRESULT_HANDLE(HANDLE);
 
-// =====================================================================
-// THE pfn_FOO TABLE (the most important block of code in this DLL)
-// =====================================================================
+// The pfn_FOO table. Each slot is the .data location that the matching
+// asm tail-jump stub in dxgi_stubs.asm reads. Symbol names must match
+// the `EXTERN pfn_FOO:QWORD` declarations in the asm.
 //
-// These 20 pointers are the .data slots that the asm tail-jump stubs
-// in dxgi_stubs.asm dereference. Each `jmp QWORD PTR [pfn_FOO]` reads
-// 8 bytes from one of these slots and jumps to that address.
-//
-// They are INITIALIZED AT COMPILE TIME to point at trap functions in
-// dtf_traps.cpp.
-//
-// A normal C++ programmer would write:
-//     void* pfn_CreateDXGIFactory = nullptr;
-// and resolve them at runtime in DllMain. **DO NOT change this code to
-// that.** The first version of this DLL did exactly that, and it
-// crashed every install on every machine. The crash was:
-//
-//   - Process starts, OS loader maps our dxgi.dll.
-//   - OS loader's app-compat shim layer (apphelp.dll) runs its
-//     compat-fixup pass on the just-loaded DLL. For dxgi, that pass
-//     calls SetAppCompatStringPointer to apply per-app compat data.
-//   - apphelp resolves SetAppCompatStringPointer via our export
-//     table (the dxgi proxy DLL was just loaded; its exports are
-//     now in apphelp's reach) → gets our exported stub address.
-//   - apphelp calls our stub → jmp QWORD PTR [pfn_SetAppCompatStringPointer]
-//   - pfn_SetAppCompatStringPointer is still nullptr (DllMain hasn't
-//     run yet — apphelp runs BEFORE DllMain).
-//   - Jump to address 0 → fault at 0 → process death.
-//   - User sees: DXMD crashes instantly on launch, no log file
-//     created (because our log_init never got to run either).
-//
-// The fix below is to initialize every slot at compile time to a
-// non-null trap. When apphelp does its pre-DllMain calls, the stubs
-// land on the traps, the traps return a safe value, apphelp moves on,
-// then the loader actually runs our DllMain and we overwrite these
-// pointers with real System32 dxgi addresses.
-//
-// load_system_dxgi_and_resolve() (below in this file) does that
-// overwrite. After it runs, "trap" pointers only remain in slots
-// where the host's Windows version doesn't actually export that
-// function (rare; mostly Windows-10+-only exports on older Windows).
-//
-// Why different traps for different exports? Because returning 0 means
-// different things to different APIs. For SetAppCompatStringPointer
-// (called by apphelp's compat pass), returning 0 was observed to be
-// accepted by apphelp — it continues the load. We don't have public
-// documentation of the API's semantics; what we have is empirical
-// evidence (debugger and minidump analysis on the actual DXMD startup
-// path) that 0 is the right answer. For CreateDXGIFactory, returning
-// 0 (S_OK) would mean "factory created
-// successfully" and the caller would dereference the uninitialized
-// output pointer and crash. So:
-//
-//   - dtf_trap_pre_resolve: generic, returns 0 in RAX. Used for the
-//     compat-namespace exports apphelp actually calls, plus the
-//     undocumented private dxgi exports (PIX*, DXGID3D10*, etc.)
-//     where we don't have a published signature to model. 0 isn't
-//     guaranteed semantically safe for those — if any of them is
-//     HRESULT-shaped, 0 would mean S_OK and a downstream caller
-//     could deref an uninitialized out-pointer. In practice these
-//     exports exist on every supported Windows version, so they
-//     resolve to real System32 dxgi addresses at runtime and the
-//     trap is dead code. The trap exists only as a last-resort
-//     "the host's Windows doesn't have this export AND something
-//     called it anyway" path, where the alternative would be a
-//     null-pointer crash.
-//   - dtf_trap_CreateDXGIFactory (REFIID, void**): zeros the out-pointer
-//     and returns DXGI_ERROR_NOT_FOUND. Used for CreateDXGIFactory and
-//     CreateDXGIFactory1.
-//   - dtf_trap_CreateDXGIFactory2 (UINT, REFIID, void**): same shape with
-//     the extra Flags param. Used for CreateDXGIFactory2 and
-//     DXGIGetDebugInterface1.
-//   - dtf_trap_HRESULT_void: zero-arg, returns DXGI_ERROR_NOT_FOUND.
-//     Used for DXGIDeclareAdapterRemovalSupport.
-//   - dtf_trap_HRESULT_HANDLE: HANDLE arg, returns DXGI_ERROR_NOT_FOUND.
-//     Used for DXGIDisableVBlankVirtualization.
-//
-// These pointers MUST be named `pfn_<ExportName>` exactly — the asm
-// stubs in dxgi_stubs.asm reference them by those names via MASM's
-// `EXTERN pfn_FOO:QWORD` declarations.
+// **Do not change these initializers to nullptr.** See dtf_traps.cpp.
 extern "C" {
     void* pfn_ApplyCompatResolutionQuirking    = (void*)&dtf_trap_pre_resolve;
     void* pfn_CompatString                     = (void*)&dtf_trap_pre_resolve;
@@ -190,30 +77,10 @@ static const ExportSpec g_exports[] = {
 };
 
 HMODULE load_system_dxgi_and_resolve() {
-    // =================================================================
-    // UNUSUAL THING: we're proxying dxgi.dll, but ALSO we're loading
-    // the real dxgi.dll. How do we get the real one when our shim
-    // has the same name?
-    // =================================================================
-    //
-    // We build the path absolutely from GetSystemDirectoryW (which on
-    // every supported Windows version resolves to C:\Windows\System32,
-    // or whatever the user's actual system directory is). The result
-    // is something like:
-    //
-    //     C:\Windows\System32\dxgi.dll
-    //
-    // We then LoadLibraryExW that ABSOLUTE PATH. Because the path is
-    // fully qualified, Windows does no search-path lookup at all — it
-    // opens that exact file. This cannot accidentally load our own
-    // proxy (which is at <game>\retail\dxgi.dll, not in System32) or
-    // any other dxgi.dll the user might have lying around.
-    //
-    // SECURITY-CURIOUS READERS: yes, an attacker who could already
-    // overwrite C:\Windows\System32\dxgi.dll already owns your machine
-    // far worse than this DLL can make it. That's outside our threat
-    // model. The build-an-absolute-path-from-System32 pattern is the
-    // standard MSDN-recommended way to do this.
+    // Build an absolute path to System32\dxgi.dll. Because the path is
+    // fully qualified, Windows skips all search-path resolution — we
+    // can't accidentally load our own proxy (in <game>\retail\) or any
+    // other dxgi.dll on the search path.
     wchar_t path[MAX_PATH];
     UINT n = GetSystemDirectoryW(path, MAX_PATH);
     if (n == 0 || n >= MAX_PATH - 16) return nullptr;
@@ -223,29 +90,13 @@ HMODULE load_system_dxgi_and_resolve() {
     }
     wcscat_s(path, MAX_PATH, L"dxgi.dll");
 
-    // About the LOAD_WITH_ALTERED_SEARCH_PATH flag: it sounds scary
-    // ("altered search path" → "attacker controlling DLL search?")
-    // but it's the OPPOSITE here. The flag tells the loader: "for any
-    // DEPENDENT DLLs that the file I'm loading needs, search starting
-    // from THAT file's directory instead of mine."
-    //
-    // Concretely: when the loader maps System32\dxgi.dll, dxgi has
-    // its own dependencies (ntdll, advapi32, gdi32, etc. — exact
-    // list varies by Windows version). Without this flag, the
-    // dependency search starts in the loading PROCESS'S directory —
-    // which for us is the game folder, NOT System32. With the flag,
-    // the search starts in the directory of the file we're loading
-    // (System32\dxgi.dll's directory = System32). That avoids
-    // resolving dxgi's dependencies out of <game>\retail\ if anyone
-    // had ever planted a same-named DLL there. (It is not the
-    // strictest possible pinning — Windows still applies its standard
-    // search order after that starting point. The stricter
-    // LOAD_LIBRARY_SEARCH_SYSTEM32 [Win8+] limits resolution to
-    // System32 only, but isn't available on our Win7 SP1 baseline.
-    // The absolute-path + ALTERED_SEARCH_PATH combo is the best
-    // we can portably do, and in practice dxgi's dependencies are
-    // all System32 binaries that Windows resolves before any
-    // app-dir lookup anyway.)
+    // LOAD_WITH_ALTERED_SEARCH_PATH tells the loader to resolve the
+    // loaded file's own dependencies starting from that file's
+    // directory (i.e. System32) rather than from the host process
+    // directory. Without it, dxgi's dependencies could resolve out of
+    // the game folder if a same-named DLL had been planted there.
+    // LOAD_LIBRARY_SEARCH_SYSTEM32 would be stricter but isn't
+    // available on our Win7 SP1 baseline.
     HMODULE h = LoadLibraryExW(path, nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
     if (!h) {
         log_line("FATAL: could not load real dxgi: %ls (err %lu)", path, GetLastError());
@@ -261,11 +112,8 @@ HMODULE load_system_dxgi_and_resolve() {
             *e.slot = reinterpret_cast<void*>(p);
             resolved++;
         } else {
-            // Not present on this Windows version. The slot keeps
-            // pointing at its compile-time trap (see dtf_traps.cpp).
-            // For HRESULT-returning APIs that's a typed failure stub
-            // (DXGI_ERROR_NOT_FOUND); for others it's the generic
-            // dtf_trap_pre_resolve. Either way: NOT a null pointer.
+            // Export not present on this Windows version. Slot keeps
+            // its compile-time trap (a typed failure stub, not null).
             missing++;
             log_line("WARN: real dxgi missing export %s (this Windows: err %lu)",
                      e.name, GetLastError());

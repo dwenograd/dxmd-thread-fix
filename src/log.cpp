@@ -1,30 +1,4 @@
-// log.cpp - implementation of the file logger described in log.h.
-//
-// Lifecycle (driven by dllmain.cpp's attach()):
-//   1. log_init_deferred(self) — records the log file path (via
-//      path_util's long-path-safe helper) but does NOT open the
-//      file yet. Safe to call before config is parsed.
-//   2. After config is loaded, log_set_level(cfg.log_level) is called.
-//      If level > 0, this opens (and truncates) the log file.
-//   3. log_line(fmt, ...) writes a single timestamped line, taking the
-//      critical section for thread safety. Each call opens-writes-closes
-//      the file, so writes survive a game crash (the line is committed
-//      to the OS file handle before the next log call runs; we don't
-//      call FlushFileBuffers, so this is crash-safe but not power-loss-safe
-//      — see log.cpp's log_line for the full rationale).
-//   4. log_shutdown() (called on explicit FreeLibrary, not at process
-//      exit) tears down the critical section and frees the heap path.
-//
-// Why open-write-close every line instead of holding the file open?
-//   - Durability: if DXMD crashes (the entire reason this DLL exists),
-//     we don't want the crash to leave the log buffer-flushed.
-//   - Simplicity: no separate flush logic, no buffered-write races.
-//   - Cost: negligible — we write a few dozen lines per game session
-//     at LogLevel=1.
-//
-// Why heap-allocated g_log_path instead of wchar_t[MAX_PATH]?
-//   - Long-path support (Windows allows >MAX_PATH paths with long-path
-//     opt-in). path_util's helper grows up to 32K wchars; we follow.
+// log.cpp - file logger described in log.h.
 
 #include "log.h"
 #include "path_util.h"
@@ -37,7 +11,7 @@ namespace dtf {
 
 static CRITICAL_SECTION g_lock;
 static bool             g_lock_inited = false;
-static wchar_t*         g_log_path = nullptr;   // heap-allocated; can be very long
+static wchar_t*         g_log_path = nullptr;   // heap-allocated; can be long
 static int              g_level = 1;
 static bool             g_inited = false;
 
@@ -71,6 +45,9 @@ void log_init(HMODULE self, int level) {
     if (level > 0) log_open();
 }
 
+// Records path but doesn't open the file. Deferring the open until
+// log_set_level() means LogLevel=0 leaves no log file on disk at all
+// (a trust signal — users can verify the DLL is silent).
 void log_init_deferred(HMODULE self) {
     if (g_inited) return;
     InitializeCriticalSection(&g_lock);
@@ -78,44 +55,11 @@ void log_init_deferred(HMODULE self) {
     g_level = 0;
     compute_log_path(self);
     g_inited = true;
-    // Do NOT open the file yet; wait until config tells us LogLevel > 0.
-    //
-    // This "deferred" pattern is a deliberate trust signal for users
-    // who set LogLevel=0 in dxmd-thread-fix.ini. If we always created
-    // the log file (even empty), a privacy-aware user couldn't easily
-    // verify the DLL is silent. With deferred init:
-    //
-    //   - LogLevel=0  → no log file is ever created or touched. The
-    //                   DLL is provably silent (delete the log file
-    //                   and confirm it doesn't reappear after launch).
-    //   - LogLevel>=1 → log_set_level(level) below calls log_open()
-    //                   which creates (and truncates) the log file
-    //                   immediately — BEFORE the first log_line call,
-    //                   so the file exists from the start of the
-    //                   session even if no log line has been emitted
-    //                   yet. Subsequent log_line calls append per-
-    //                   line with the open/write/close pattern.
-    //
-    // The cost is two-stage init in dllmain.cpp: log_init_deferred
-    // FIRST (so the critical section exists before any thread might
-    // hit log_line), then load_config, then log_set_level which
-    // calls log_open if LogLevel > 0.
 }
 
-// Truncating CreateFileW (CREATE_ALWAYS) used here, NOT append. This
-// is the SESSION log file: each game launch starts a fresh log. Append
-// mode would let the file grow indefinitely across runs, which is bad
-// for both disk space and for the user's ability to find "what
-// happened in this run" (they'd have to scroll past months of history).
-//
-// We use the SAME permissive sharing flags as log_line() below
-// (FILE_SHARE_READ | FILE_SHARE_WRITE). If we used the stricter
-// FILE_SHARE_READ here, a user who had the prior session's log file
-// open in a permissive editor (notepad++, vscode, etc.) could cause
-// our truncation to silently fail — and then log_line() would
-// succeed-append onto the prior session's stale lines, mixing two
-// game sessions in one file. Permissive sharing here makes
-// truncation succeed even when the file is open elsewhere.
+// Truncating open (CREATE_ALWAYS): each game launch starts a fresh log.
+// Permissive sharing flags here match log_line() so truncation succeeds
+// even when the prior session's file is open in an editor.
 void log_open() {
     if (!g_inited) return;
     if (!g_log_path || g_log_path[0] == 0) return;
@@ -140,7 +84,6 @@ int log_level() { return g_level; }
 void log_set_level(int level) {
     const int prev = g_level;
     g_level = level;
-    // If we were silent and now want to log, open the file lazily.
     if (prev == 0 && level > 0) log_open();
 }
 
@@ -153,9 +96,7 @@ void log_line(const char* fmt, ...) {
     va_start(ap, fmt);
     int n = _vsnprintf_s(msg, sizeof(msg), _TRUNCATE, fmt, ap);
     va_end(ap);
-    // _vsnprintf_s returns -1 on truncation with _TRUNCATE, but still
-    // writes a null-terminated truncated string. Recover the length so
-    // long lines aren't silently dropped.
+    // _vsnprintf_s returns -1 on truncation but still null-terminates.
     if (n < 0) {
         msg[sizeof(msg) - 1] = '\0';
         n = static_cast<int>(strlen(msg));
@@ -171,34 +112,13 @@ void log_line(const char* fmt, ...) {
     if (pn <= 0) return;
 
     EnterCriticalSection(&g_lock);
-    // CreateFileW + WriteFile + CloseHandle PER LINE looks weird — most
-    // loggers hold the file open. We deliberately don't, for two reasons:
-    //
-    // 1. Durability. The entire reason this DLL exists is that DXMD
-    //    crashes. If our log doesn't flush before the crash, the most
-    //    important lines (FIX STATUS, last hooked call before crash)
-    //    are lost. CreateFile+Write+CloseHandle means each line is
-    //    committed to the OS file handle (and thus visible to
-    //    whoever opens the file next) before the next line runs.
-    //    The line survives a process crash. (It does NOT guarantee
-    //    physical-disk durability against power loss — we don't
-    //    call FlushFileBuffers — but the threat we're protecting
-    //    against is "DXMD crashed mid-game", not "the user yanked
-    //    the power cord", and crash-survival is all we need.)
-    //
-    // 2. File sharing. If a curious user (or our own install script)
-    //    opens the log file in Notepad while the game is running, a
-    //    held-open exclusive handle would prevent that. The per-call
-    //    open uses FILE_SHARE_READ | FILE_SHARE_WRITE so anyone can
-    //    peek at the log mid-session.
-    //
-    // The cost is a few syscalls per logged line. At LogLevel=1 that's
-    // ~10 lines per game session (startup banner only). At LogLevel=2
-    // it's more, but that level is only for bug reports.
-    //
-    // OPEN_ALWAYS opens the file if it exists, creates if not (which
-    // matters when LogLevel was raised from 0 → 1 mid-attach and the
-    // file wasn't pre-opened by log_open).
+    // Open-write-close per line so each line is committed to the OS
+    // file handle before the next call — important because the whole
+    // point of this DLL is that DXMD crashes, and we want the last
+    // logged lines (FIX STATUS, last hook call) to survive. Permissive
+    // sharing lets the user tail the log while the game is running.
+    // OPEN_ALWAYS covers the case where LogLevel was raised 0 → 1
+    // mid-attach before log_open ran.
     HANDLE h = CreateFileW(g_log_path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
                            nullptr, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h != INVALID_HANDLE_VALUE) {
@@ -211,11 +131,8 @@ void log_line(const char* fmt, ...) {
     LeaveCriticalSection(&g_lock);
 }
 
-// Used by detours to throttle log output at LogLevel=1. Returns true
-// the FIRST time it's called for a given flag, false thereafter.
-// Implemented as an atomic compare-and-swap so multiple game threads
-// can race into the hooked API simultaneously and exactly one wins
-// the "log this" race.
+// Returns true exactly once per `flag` via atomic CAS. Used to throttle
+// LogLevel=1 output so each hooked API logs only on its first call.
 bool first_hit(LONG volatile* flag) {
     return InterlockedCompareExchange(flag, 1, 0) == 0;
 }

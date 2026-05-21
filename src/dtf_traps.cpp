@@ -1,216 +1,77 @@
-// dtf_traps.cpp - per-export trap functions for the dxgi proxy.
+// dtf_traps.cpp - trap functions for the dxgi proxy.
 //
-// =====================================================================
-// UNUSUAL THING: every dxgi function pointer points HERE before the
-// real System32 dxgi is resolved.
-// =====================================================================
+// Every pfn_FOO global in dxgi_exports.cpp is initialized at compile
+// time to point at one of these traps. This is load-bearing: the
+// Windows app-compat shim engine (apphelp.dll's SE_DllLoaded path)
+// calls some dxgi exports — notably SetAppCompatStringPointer — BEFORE
+// our DllMain runs. If pfn_FOO were nullptr at that point, the asm
+// stub's `jmp QWORD PTR [pfn_FOO]` would jump to address 0 and the
+// process would die before our log file was even created. Confirmed
+// via minidump analysis on real DXMD crash dumps.
 //
-// What's weird: This file defines 5 functions whose only purpose is to
-// be the initial target of our exported tail-jump stubs. They look
-// useless. They are not — they are load-bearing.
+// **Do not "fix" the pfn_FOO globals to default to nullptr.** Doing so
+// breaks every install in a way that's hostile to diagnose (crash
+// before any log artifact exists).
 //
-// What specifically breaks without them: the first version of this DLL
-// initialized the pfn_FOO pointers to nullptr, planning to fill them
-// in during DllMain. Every install crashed instantly on game launch
-// with a fault at address 0. The crash sequence we eventually traced
-// (via Python minidump-library analysis of the user's crash dump):
+// Why 5 traps instead of 1 generic "return 0":
+//   - For SetAppCompatStringPointer (apphelp's compat-pass target),
+//     returning 0 is observed safe.
+//   - For CreateDXGIFactory(REFIID, void**), returning 0 means S_OK —
+//     and a caller that doesn't check the return would dereference an
+//     uninitialized out-pointer. A typed DXGI_ERROR_NOT_FOUND return
+//     with the out-pointer zeroed is much safer.
 //
-//   1. Process starts. OS loader maps DXMD.exe's import dependencies
-//      including our dxgi.dll. Our DLL is on disk and now in memory.
+// After load_system_dxgi_and_resolve() runs, every slot for which the
+// host's Windows actually exports the symbol is overwritten with the
+// real address. Traps remain live only for exports the host's Windows
+// version doesn't provide.
 //
-//   2. **Before** running our DllMain, the OS loader invokes
-//      apphelp.dll's app-compat shim engine. For executables
-//      flagged for compat fixups (DXMD is, like most pre-Win10 AAA
-//      games), apphelp runs on the DLLs being loaded and pokes
-//      known compat-relevant exports with per-app strings. This is
-//      what we have empirically observed in the DXMD startup path
-//      via debugger and minidump analysis; we don't claim it as a
-//      universal "every DLL, every Windows version" guarantee.
-//
-//   3. For dxgi specifically, apphelp resolves and calls
-//      `SetAppCompatStringPointer` on the dxgi module that's about to
-//      satisfy the import. Because OS load order picked our dxgi.dll
-//      (sitting next to DXMD.exe) over System32\dxgi.dll, apphelp
-//      gets a pointer to OUR exported stub.
-//
-//   4. Our stub is the tail-jump `jmp QWORD PTR [pfn_SetAppCompatStringPointer]`.
-//      The pointer is still nullptr (DllMain hasn't run — we're
-//      pre-DllMain). The CPU jumps to address 0.
-//
-//   5. Process death. Fault offset 0 in BEX64. No log file (log_init
-//      never ran). User just sees "DXMD crashed".
-//
-// We could not deduce step 2-3 from documentation; apphelp's compat
-// pass is largely undocumented. We confirmed it by:
-//   - Extracting the crash dump's exception context: RIP=0, RAX held
-//     the address of our `SetAppCompatStringPointer` exported stub.
-//   - Setting a debugger breakpoint on the stub and inspecting the
-//     call stack: top frame was `apphelp!SE_DllLoaded` calling into
-//     dxgi compat-fixup code, all of this BEFORE our DllMain entry.
-//   - Verifying the same export wasn't called by our PowerShell
-//     smoke-load test (PowerShell's LoadLibraryW doesn't carry the
-//     same app-compat manifest, so smoke tests missed it entirely —
-//     don't trust them for proxy-DLL validation).
-//
-// The fix is this file: every pfn_FOO slot is initialized AT COMPILE
-// TIME (see the initializer block in dxgi_exports.cpp) to point at
-// one of these trap functions. When apphelp does its pre-DllMain call
-// the stub jumps to a real function that returns a safe value, apphelp
-// is satisfied, the loader proceeds, and our DllMain runs and
-// overwrites every slot with the real System32 dxgi address.
-//
-// =====================================================================
-// UNUSUAL THING: 5 traps with 5 different signatures, not 1 generic
-// trap.
-// =====================================================================
-//
-// What's weird: a single "return 0 in RAX, ret" trap would satisfy the
-// CPU. We have FIVE separate trap functions instead.
-//
-// What specifically breaks with a single generic trap: returning 0
-// means different things to different callers.
-//
-//   - For SetAppCompatStringPointer (called by apphelp), the return
-//     value is treated as "shim status applied" / void-ish. 0 is fine.
-//
-//   - For CreateDXGIFactory(REFIID, void** ppFactory), returning 0
-//     means `S_OK` ("factory created successfully — see ppFactory").
-//     The caller then dereferences *ppFactory, which is uninitialized
-//     stack/register memory because we never wrote to it. That's a
-//     strictly-WORSE failure than a clean error code: the user gets a
-//     random-looking crash inside d3d code rather than a clear
-//     "DXGI_ERROR_NOT_FOUND" return that any sensible caller will
-//     check and propagate.
-//
-// So the traps are split by signature:
-//
-//   - `dtf_trap_pre_resolve`         (returns 0): apphelp compat-pass
-//     exports (where empirically 0 is accepted), and undocumented
-//     PIX/DXGID3D10 internals as a best-effort fallback. For the
-//     undocumented exports we have no semantic proof that 0 is safe;
-//     the trap is belt-and-suspenders for the case where the host
-//     OS doesn't export the function AND something calls it. In
-//     practice these aren't called pre-DllMain — we use the same
-//     generic trap mostly for consistency.
-//
-//   - `dtf_trap_CreateDXGIFactory`   (REFIID, void**): zeros the out-
-//     pointer, returns DXGI_ERROR_NOT_FOUND. Used for
-//     CreateDXGIFactory and CreateDXGIFactory1.
-//
-//   - `dtf_trap_CreateDXGIFactory2`  (UINT, REFIID, void**): same with
-//     the Flags param. Used for CreateDXGIFactory2 and
-//     DXGIGetDebugInterface1.
-//
-//   - `dtf_trap_HRESULT_void`        (no args): returns
-//     DXGI_ERROR_NOT_FOUND. Used for DXGIDeclareAdapterRemovalSupport.
-//
-//   - `dtf_trap_HRESULT_HANDLE`      (HANDLE): returns
-//     DXGI_ERROR_NOT_FOUND. Used for DXGIDisableVBlankVirtualization.
-//
-// After DllMain runs, load_system_dxgi_and_resolve() overwrites every
-// pfn_FOO with the real System32 dxgi address. The traps then only
-// stay live for exports the host's Windows version doesn't provide
-// (rare; mostly Win10+ exports on Win7/8). In that case, the caller
-// gets the typed failure return — debuggable, expected, not a crash.
-//
-// =====================================================================
-// Why these generic-return traps are safe in this codebase
-// (and wouldn't be in a 32-bit stdcall proxy)
-// =====================================================================
-//
-// This project is x64-only (/MACHINE:X64, see build.ps1; dxgi.def
-// declares 64-bit ordinals; the asm stubs use rax/rcx-style 64-bit
-// registers). Under the Windows x64 calling convention, the caller
-// allocates and reclaims the shadow space and all stack arguments;
-// the callee is responsible only for non-volatile registers (which
-// these traps don't touch). So a trap with the "wrong" parameter
-// count or shape still leaves the caller's stack and volatile
-// registers in a state the caller already expected.
-//
-// On 32-bit stdcall (used by older Win32 DLLs), the CALLEE is
-// expected to clean up the stack with `ret <bytes>`. A trap with
-// the wrong signature would leave the stack imbalanced and crash
-// the process on return. If anyone ever ports this idea to a
-// 32-bit proxy DLL, they'd need to match each trap's calling
-// convention and argument-count to its export exactly.
+// These traps are safe under the x64 calling convention because RCX/
+// RDX/R8/R9 are caller-saved volatile registers — the trap can ignore
+// arguments without leaving caller state inconsistent. A 32-bit
+// stdcall port would need per-export argument-count matching.
 
 #include <windows.h>
 
-// dxgi headers aren't pulled in to keep our DLL minimal; define the
-// constants we need.
 #ifndef DXGI_ERROR_NOT_FOUND
 #define DXGI_ERROR_NOT_FOUND 0x887A0002L
 #endif
 
-// --- Generic trap: used for compat-pass exports + undocumented ones --
-//
-// `__declspec(noinline)` + `extern "C"` keeps the symbol intact under
-// LTCG (whole-program optimization) so the linker doesn't inline this
-// into some other unrelated function and leave the pfn_FOO initializer
-// pointing at half a function.
-//
-// Note that the Release link's /OPT:ICF (identical COMDAT folding)
-// may still fold trap functions with identical machine-code bodies to
-// the same address — e.g. dtf_trap_HRESULT_void and dtf_trap_HRESULT_HANDLE
-// both compile to `mov eax, 0x887A0002; ret` and may share one address
-// in the final binary. That's functionally safe: both return the same
-// HRESULT and neither reads caller-supplied state. Be aware when
-// inspecting the binary in a debugger — a single address may show up
-// under two symbol names.
+// `__declspec(noinline)` + `extern "C"` keeps these as real symbols
+// under LTCG so the linker doesn't fold or inline them away. Release
+// builds may still apply /OPT:ICF and fold trap functions with
+// identical bodies (e.g. dtf_trap_HRESULT_void and
+// dtf_trap_HRESULT_HANDLE) to the same address — functionally fine,
+// just be aware when inspecting the binary.
 extern "C" __declspec(noinline) void* WINAPI dtf_trap_pre_resolve(void) {
     return nullptr;
 }
 
-// --- Typed traps for documented DXGI exports -------------------------
-
-// CreateDXGIFactory(REFIID riid, void **ppFactory)
-// CreateDXGIFactory1(REFIID riid, void **ppFactory)
-//
-// CRITICAL: zero the out-pointer BEFORE returning failure. If we just
-// returned the HRESULT without touching ppFactory, a caller that
-// ignored the return value (yes, some do) would dereference an
-// uninitialized pointer. Zeroing it ensures any such caller faults
-// cleanly on `(*ppFactory)->...` rather than reading random memory.
+// CreateDXGIFactory / CreateDXGIFactory1.
+// Zero the out-pointer BEFORE returning failure: a caller that ignores
+// the HRESULT will then fault cleanly on `(*ppFactory)->...` rather
+// than reading random memory.
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_CreateDXGIFactory(REFIID /*riid*/, void** ppFactory) {
     if (ppFactory) *ppFactory = nullptr;
     return DXGI_ERROR_NOT_FOUND;
 }
 
-// CreateDXGIFactory2(UINT Flags, REFIID riid, void **ppFactory)
-// DXGIGetDebugInterface1(UINT Flags, REFIID riid, void **pDebug)
-//
-// Same shape with the extra Flags param. Same zero-the-out-pointer
-// guarantee.
+// CreateDXGIFactory2 / DXGIGetDebugInterface1.
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_CreateDXGIFactory2(UINT /*Flags*/, REFIID /*riid*/, void** ppFactory) {
     if (ppFactory) *ppFactory = nullptr;
     return DXGI_ERROR_NOT_FOUND;
 }
 
-// DXGIDeclareAdapterRemovalSupport(void) -> HRESULT
-//
-// No out-parameter; just an HRESULT. Returning failure means "this
-// process didn't declare adapter-removal support" which is the safe
-// default behavior.
+// DXGIDeclareAdapterRemovalSupport.
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_HRESULT_void(void) {
     return DXGI_ERROR_NOT_FOUND;
 }
 
-// DXGIDisableVBlankVirtualization(HANDLE hAdapter) -> HRESULT
-//
-// This signature is undocumented and the community sources we found
-// disagree on the exact parameter shape. The trap below DELIBERATELY
-// does not depend on argument layout — it just returns an HRESULT
-// failure value. Under the Windows x64 ABI, RCX/RDX/R8/R9 are
-// volatile (caller-saved): the CALLER must already assume those
-// registers can be clobbered by any call, so it doesn't matter how
-// many parameters this stub does or doesn't formally accept — we
-// just don't touch caller state. The HANDLE parameter is written
-// out for documentation only, so a reader comparing this file to
-// MSDN or to leaked headers can see what shape we believed the
-// export to have at the time we wrote this.
+// DXGIDisableVBlankVirtualization. HANDLE arg is documentation only;
+// under x64 ABI the trap doesn't depend on argument layout.
 extern "C" __declspec(noinline) HRESULT WINAPI
 dtf_trap_HRESULT_HANDLE(HANDLE /*hAdapter*/) {
     return DXGI_ERROR_NOT_FOUND;
