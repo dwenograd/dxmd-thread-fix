@@ -56,6 +56,15 @@
 #endif
 
 // --- Generic trap: used for compat-pass exports + undocumented ones --
+//
+// `noinline` + `extern "C"` keeps the symbol intact under LTCG. Note
+// that the Release link's `/OPT:ICF` may still fold identical-body trap
+// functions to the same address (e.g. dtf_trap_HRESULT_void and
+// dtf_trap_HRESULT_HANDLE both compile to `mov eax, 0x887A0002; ret`
+// and may share one address in the final binary). That's functionally
+// safe — both return the same HRESULT and neither reads any
+// caller-supplied state — but be aware when inspecting the binary in
+// a debugger.
 
 extern "C" __declspec(noinline) void* WINAPI dtf_trap_pre_resolve(void) {
     return nullptr;

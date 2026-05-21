@@ -5,10 +5,17 @@
 // globals named `pfn_<ExportName>`; the assembly stubs in dxgi_stubs.asm
 // tail-jump through these pointers.
 //
-// Must be called BEFORE any exported stub is invoked. We call it from
-// DllMain(DLL_PROCESS_ATTACH) (loading a system DLL from DllMain is the
-// one form of recursive load that's actually safe in practice, and
-// system dxgi is sometimes already loaded by the time we're attached).
+// Each pfn_FOO is initialized at COMPILE TIME (in dxgi_exports.cpp) to
+// a no-op trap function (see dtf_traps.cpp), so the asm stubs are safe
+// to invoke at any time — including BEFORE this function runs. The
+// Windows loader's apphelp compat pass calls some dxgi exports
+// (notably SetAppCompatStringPointer) before our DllMain runs, and
+// trapping those harmlessly is the whole reason the trap design exists.
+//
+// load_system_dxgi_and_resolve() is called from DllMain after our log
+// and config are initialized; it overwrites every successfully-resolved
+// pfn_FOO with the real System32 address. After that, normal forwarded
+// calls reach the real dxgi.
 
 #pragma once
 

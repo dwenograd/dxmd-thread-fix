@@ -1,8 +1,10 @@
 # package.ps1 - build and assemble a release zip.
 #
-# Produces:
-#   release\dxmd-thread-fix-v<VERSION>.zip
-#   release\dxmd-thread-fix-v<VERSION>-SHA256SUMS.txt
+# Produces (in release\):
+#   dxmd-thread-fix-v<VERSION>.zip
+#   dxmd-thread-fix-v<VERSION>-SHA256SUMS.txt   (per-file manifest, also embedded in zip)
+#   dxmd-thread-fix-v<VERSION>-headers.txt      (dumpbin /headers output)
+#   dxmd-thread-fix-v<VERSION>-exports.txt      (dumpbin /exports output)
 #
 # The zip contains everything an end-user needs:
 #   dxgi.dll
@@ -10,8 +12,10 @@
 #   README.md
 #   LICENSE
 #   CHANGELOG.md
-#   third_party/minhook/LICENSE.txt
+#   SHA256SUMS.txt
 #   install.ps1, uninstall.ps1 (optional, for users who want them)
+#   third_party/minhook/LICENSE.txt
+#   third_party/minhook/PROVENANCE.md
 #
 # Does NOT include source code (that's on GitHub).
 #
@@ -73,6 +77,9 @@ Write-Host "=== Hashing release contents ===" -ForegroundColor Cyan
 $manifest = @()
 $manifest += "# SHA-256 hashes for dxmd-thread-fix v$Version"
 $manifest += "# Generated: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')"
+$manifest += "#"
+$manifest += "# This manifest does NOT include its own hash (would be circular)."
+$manifest += "# The hash of SHA256SUMS.txt itself is published on the GitHub release page."
 $manifest += ""
 Get-ChildItem -LiteralPath $stage -Recurse -File | Sort-Object FullName | ForEach-Object {
     $rel  = $_.FullName.Substring($stage.Length + 1).Replace('\', '/')
@@ -89,6 +96,32 @@ Set-Content -LiteralPath $shaFile -Value ($manifest -join "`r`n") -Encoding ASCI
 # locally, not "DLL here, hashes on a separate web page somewhere."
 $inZipSha = Join-Path $stage 'SHA256SUMS.txt'
 Set-Content -LiteralPath $inZipSha -Value ($manifest -join "`r`n") -Encoding ASCII
+
+# -- Generate dumpbin artifacts (alongside the zip, not inside) ---------
+#
+# README's trust section promises these so suspicious users can inspect
+# the DLL's PE headers and exports without having dumpbin installed.
+# We locate dumpbin via vswhere, same pattern as build.ps1.
+
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+if (Test-Path -LiteralPath $vswhere) {
+    $vs = & $vswhere -latest -property installationPath
+    $dumpbin = Get-ChildItem -LiteralPath "$vs\VC\Tools\MSVC" -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -match 'Hostx64\\x64' } | Select-Object -First 1
+    if ($dumpbin) {
+        Write-Host "=== Generating dumpbin artifacts ===" -ForegroundColor Cyan
+        $headersFile = Join-Path $release "dxmd-thread-fix-v$Version-headers.txt"
+        $exportsFile = Join-Path $release "dxmd-thread-fix-v$Version-exports.txt"
+        & $dumpbin.FullName /headers $dll > $headersFile
+        & $dumpbin.FullName /exports $dll > $exportsFile
+        Write-Host "  $headersFile" -ForegroundColor DarkGray
+        Write-Host "  $exportsFile" -ForegroundColor DarkGray
+    } else {
+        Write-Host "WARN: dumpbin not found; skipping headers/exports text generation." -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "WARN: vswhere not found; skipping headers/exports text generation." -ForegroundColor Yellow
+}
 
 # -- Build the zip -----------------------------------------------------
 

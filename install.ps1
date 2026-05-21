@@ -36,9 +36,29 @@ $root = Split-Path -Parent $PSCommandPath
 # This script is shipped in both, so we accept either.
 $dllSourceTree  = Join-Path $root 'dist\dxgi.dll'
 $dllReleaseZip  = Join-Path $root 'dxgi.dll'
-if (Test-Path -LiteralPath $dllSourceTree) {
+$hasSourceTree  = Test-Path -LiteralPath $dllSourceTree
+$hasReleaseZip  = Test-Path -LiteralPath $dllReleaseZip
+if ($hasSourceTree -and $hasReleaseZip) {
+    # Ambiguous: both layouts present. Refuse rather than guess.
+    $sthash = (Get-FileHash -LiteralPath $dllSourceTree -Algorithm SHA256).Hash
+    $rzhash = (Get-FileHash -LiteralPath $dllReleaseZip -Algorithm SHA256).Hash
+    if ($sthash -eq $rzhash) {
+        # Same file in both locations - harmless, prefer the source-tree one
+        $dll = $dllSourceTree
+    } else {
+        throw @"
+Ambiguous install layout: BOTH of these files exist and they differ:
+    $dllSourceTree    (source-tree layout, from build.ps1)
+    $dllReleaseZip   (release-zip layout, from extracted release zip)
+
+This happens if you extracted a release zip INTO a source checkout that
+also has a built dist\dxgi.dll. To resolve, delete whichever one you
+don't want to install, then re-run this script.
+"@
+    }
+} elseif ($hasSourceTree) {
     $dll = $dllSourceTree
-} elseif (Test-Path -LiteralPath $dllReleaseZip) {
+} elseif ($hasReleaseZip) {
     $dll = $dllReleaseZip
 } else {
     throw @"
@@ -196,10 +216,12 @@ if (Test-Path -LiteralPath $existingDxgi) {
             $stamp  = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
             $suffix = -join ((1..4) | ForEach-Object { '{0:x}' -f (Get-Random -Maximum 16) })
             $backup = "$existingDxgi.bak-$stamp-$suffix"
-            # Don't pass -Force here: if (improbably) a file with that
-            # exact name already exists, we want a loud failure rather
-            # than silently overwriting it.
-            Copy-Item -LiteralPath $existingDxgi -Destination $backup
+            # Pass -Force:$false explicitly so the user's
+            # $PSDefaultParameterValues can't silently add -Force and
+            # overwrite a pre-existing backup file with the same name.
+            # (Belt-and-suspenders: the timestamp+random suffix makes
+            # collision astronomically unlikely already.)
+            Copy-Item -LiteralPath $existingDxgi -Destination $backup -Force:$false
             Write-Host "  Backed up foreign dxgi.dll -> $(Split-Path $backup -Leaf)" -ForegroundColor Yellow
         }
         $conflict = $true

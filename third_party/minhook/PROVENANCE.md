@@ -19,8 +19,9 @@ Invoke-WebRequest `
 
 ## What's vendored
 
-In the **source repository**, the full upstream tree is in this
-directory (only the files needed to build MinHook as part of our DLL):
+In the **source repository**, the upstream MinHook v1.3.3 source tree
+is mirrored in this directory. Our build links only the x64 subset
+needed for inline hooking:
 
 ```
 include/MinHook.h
@@ -30,10 +31,14 @@ src/trampoline.c, trampoline.h
 src/hde/hde64.c, hde64.h
 src/hde/pstdint.h
 src/hde/table64.h
-(plus hde32.* and table32.* for completeness; we link only the x64 hde)
 ```
 
-Unmodified upstream files. To verify, compare against the upstream
+The upstream tree also contains `src/hde/hde32.*`, `src/hde/table32.*`,
+the upstream `build/` and `dll_resources/` subdirectories, etc. — those
+are present in the source repo for fidelity to upstream but are NOT
+compiled into our DLL (we're x64-only and don't ship MinHook as a DLL).
+
+Files are unmodified upstream. To verify, compare against the upstream
 tag by checksumming each file or re-running the import command above
 and diffing the result.
 

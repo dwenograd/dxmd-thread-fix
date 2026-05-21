@@ -53,13 +53,13 @@ matter:
 > in GitHub's auto-generated source archives for each tag. The source
 > file links below point at the repo.
 
-- [`src/dllmain.cpp`](src/dllmain.cpp) — entry point, ~200 lines
-- [`src/dtf_traps.cpp`](src/dtf_traps.cpp) — pre-resolve trap functions, ~110 lines
-- [`src/dxgi_exports.cpp`](src/dxgi_exports.cpp) — proxy plumbing, ~100 lines
-- [`src/dxgi_stubs.asm`](src/dxgi_stubs.asm) — 20 tail-jump stubs
-- [`src/cpu_hooks.cpp`](src/cpu_hooks.cpp) — the actual API hooks, ~300 lines
-- [`src/topology.cpp`](src/topology.cpp) — fake CPU topology state, ~85 lines
-- [`src/config.cpp`](src/config.cpp), [`src/log.cpp`](src/log.cpp) — config & log
+- [`src/dllmain.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dllmain.cpp) — entry point, ~200 lines
+- [`src/dtf_traps.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dtf_traps.cpp) — pre-resolve trap functions, ~110 lines
+- [`src/dxgi_exports.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dxgi_exports.cpp) — proxy plumbing, ~100 lines
+- [`src/dxgi_stubs.asm`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dxgi_stubs.asm) — 20 tail-jump stubs
+- [`src/cpu_hooks.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/cpu_hooks.cpp) — the actual API hooks, ~300 lines
+- [`src/topology.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/topology.cpp) — fake CPU topology state, ~85 lines
+- [`src/config.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/config.cpp), [`src/log.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/log.cpp) — config & log
 
 [mh]: https://github.com/TsudaKageyu/minhook
 
@@ -76,18 +76,20 @@ imports **only `KERNEL32.dll`**. You can verify this yourself:
 dumpbin.exe /imports dxgi.dll
 ```
 
-You'll see APIs from these categories (this list IS complete — every
-imported kernel32 symbol falls into one of these buckets):
+You'll see APIs from these categories (this is a summary; the
+complete imported-symbol list is in `dumpbin /imports dxgi.dll` and
+the per-release `dxmd-thread-fix-v<VERSION>-headers.txt` published
+alongside the zip on the GitHub release page):
 
 | Category | Examples | Why it's needed |
 |---|---|---|
-| File I/O | `CreateFileW`, `WriteFile`, `GetPrivateProfileIntW` | Reading `dxmd-thread-fix.ini`, writing `dxmd-thread-fix.log` |
+| File I/O | `CreateFileW`, `WriteFile`, `GetPrivateProfileIntW`, `FindFirstFileEx*` | Reading `dxmd-thread-fix.ini`, writing `dxmd-thread-fix.log`; CRT runtime support |
 | Module loading | `LoadLibraryExW`, `GetProcAddress`, `GetModuleHandleW`, `GetModuleFileNameW`, `GetSystemDirectoryW` | Loading the real `System32\dxgi.dll` (one absolute path; see code) |
-| Synchronization | `InitializeCriticalSection`, `EnterCriticalSection`, `LeaveCriticalSection`, `DeleteCriticalSection`, `InterlockedCompareExchange` | Thread-safe log writes and first-hit flags |
-| Code patching | `VirtualProtect`, `FlushInstructionCache`, `VirtualAlloc`, `VirtualFree` | Required by MinHook to install API hooks in our process |
+| Synchronization | `InitializeCriticalSection`, `EnterCriticalSection`, `LeaveCriticalSection`, `DeleteCriticalSection`, `InterlockedCompareExchange`, `Sleep` | Thread-safe log writes and first-hit flags; MinHook back-off |
+| Code patching | `VirtualProtect`, `VirtualQuery`, `FlushInstructionCache`, `VirtualAlloc`, `VirtualFree` | Required by MinHook to install API hooks in our process |
 | Thread management | `SuspendThread`, `ResumeThread`, `GetThreadContext`, `SetThreadContext`, `OpenThread`, `CreateToolhelp32Snapshot`, `Thread32First`, `Thread32Next` | Required by MinHook to safely patch code under other threads in our process |
-| Exception/CRT plumbing | `IsDebuggerPresent`, `SetUnhandledExceptionFilter`, `TerminateProcess`, `RaiseException`, `GetCurrentProcess`, exception/unwind helpers | Brought in by MSVC's static C runtime (`/MT`); not used by our code |
-| Heap/string | `HeapAlloc`, `HeapFree`, `GetLastError`, `lstrlen*`, etc. | Used by MinHook and the static CRT |
+| Exception/CRT plumbing | `IsDebuggerPresent`, `SetUnhandledExceptionFilter`, `UnhandledExceptionFilter`, `TerminateProcess`, `RaiseException`, `GetCurrentProcess`, exception/unwind helpers | Brought in by MSVC's static C runtime (`/MT`); not used by our code |
+| Heap/string/locale/console | `HeapAlloc`, `HeapFree`, `GetLastError`, `lstrlen*`, TLS/FLS slot helpers, console I/O, locale/codepage APIs, environment APIs | Used by MinHook and the static CRT plumbing |
 
 The only *dynamic* DLL load our code does is `LoadLibraryExW` of the
 absolute system-directory path resolved by `GetSystemDirectoryW()` —
@@ -113,12 +115,14 @@ What you should **not** see (and won't):
 - `dxmd-thread-fix.ini` — copied from this repo into `retail\` if
   absent; never overwritten if you've customized it.
 - `dxgi.dll` — copied into `retail\`.
-- `dxgi.dll.bak-YYYYMMDD-HHMMSS` — created only if you pass `-Force`
+- `dxgi.dll.bak-YYYYMMDD-HHMMSS-fff-<4 hex>` — created only if you pass `-Force`
   AND `retail\dxgi.dll` already exists AND it isn't ours AND there
   isn't an existing backup. Saves the prior (foreign-mod) DLL so
-  `uninstall.ps1` can restore it.
-- `._dtf_writetest_<guid>.tmp` — a transient zero-byte file written
-  and immediately deleted to test that `retail\` is writable.
+  `uninstall.ps1` can restore it. The millisecond + random suffix
+  guards against name collision under concurrent install runs.
+- `._dtf_writetest_<guid>.tmp` — a transient small file (4 bytes,
+  the literal string `test`) written and immediately deleted to test
+  that `retail\` is writable.
 
 **By `uninstall.ps1`:**
 - Removes the three files install.ps1 created (the DLL, INI, and log)
@@ -153,10 +157,18 @@ indicator. What you *can* verify identically is:
 - The import table (`dumpbin /imports dxgi.dll`) — only kernel32.
 - The function signatures of our hook detours (read `src/cpu_hooks.cpp`).
 
-For each official release we publish:
+For each official release we publish on the GitHub release page:
+
 - The git commit tag
-- The SHA-256 of the released `dxgi.dll`
-- The `dumpbin /headers` and `/exports` output as text files alongside the release
+- The release zip (`dxmd-thread-fix-v<VERSION>.zip`) and its SHA-256
+- A per-file SHA-256 manifest (`dxmd-thread-fix-v<VERSION>-SHA256SUMS.txt`)
+  covering everything inside the zip. This same manifest also ships
+  *inside* the zip as `SHA256SUMS.txt` so you can verify locally
+  without re-downloading.
+- The `dumpbin /headers` and `/exports` output as text files
+  (`dxmd-thread-fix-v<VERSION>-headers.txt` and `-exports.txt`)
+  so you can inspect the PE characteristics and export table without
+  needing dumpbin installed.
 
 If a third party publishes a `dxgi.dll` *claiming* to be ours, hash it
 against the GitHub release. If it doesn't match — don't run it.
@@ -248,10 +260,10 @@ That's it. Launch DXMD through Steam normally. Verify it engaged
 
 ### Scripted install (optional)
 
-If you cloned the source repo, `install.ps1` does it for you and can
-auto-detect the Steam install location. The scripts work in both
-Windows PowerShell 5.1 (which ships with Windows) and PowerShell 7
-(`pwsh`):
+If you extracted the release zip or cloned the source repo, `install.ps1`
+does it for you and can auto-detect the Steam install location. The
+scripts work in both Windows PowerShell 5.1 (which ships with Windows)
+and PowerShell 7 (`pwsh`):
 
 ```powershell
 # Stock Windows (5.1):
@@ -366,9 +378,13 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
   If your actual CPU has fewer logical processors than this, we report
   your real count (we never lie *upward*).
 
-- **`ClampAffinity`** — leave at `0` unless your log shows
-  `SetThreadAffinityMask` calls with masks outside the first
-  `LogicalProcessors` bits. Most users never need this.
+- **`ClampAffinity`** — leave at `0` (the default) unless you're
+  specifically troubleshooting affinity-related crashes. When set to
+  `1`, we additionally install a hook on `SetThreadAffinityMask` and
+  clamp any requested affinity mask into the first
+  `LogicalProcessors` bits, logging any clamping that happens. The
+  default `0` value does NOT install this hook at all, so the log
+  won't contain `SetThreadAffinityMask` lines unless you enable it.
 
 - **LogLevel** — `0` disables logging entirely: no log file is created
   or updated for the run. An *old* log file from a previous run is
@@ -524,9 +540,9 @@ transition), please [report it](#reporting-bugs) with:
 
 ### Steam "Verify integrity of game files"
 
-Steam's verify doesn't touch our files (they're not Steam-tracked) and
-doesn't restore deleted-by-us files (we don't delete any). It's safe
-to run with our shim installed.
+Steam Verify ignores extra files in the game folder (it only checks
+files Steam itself tracks). It will neither remove our `dxgi.dll`/INI/log
+nor restore anything in their place. Safe to run with our shim installed.
 
 ### Game update through Steam
 
@@ -716,12 +732,19 @@ dxmd-thread-fix/
 ├── third_party/
 │   └── minhook/              Vendored MinHook 1.3.3 (BSD-2-Clause)
 │       └── PROVENANCE.md     Upstream URL, tag, commit hash, API call list
-├── build.ps1                 One-shot MSVC build script
+├── build.ps1                 One-shot MSVC build script (produces dist/dxgi.dll)
+├── package.ps1               Build + assemble the release zip into release/
 ├── install.ps1               Copies dxgi.dll + ini into game's retail\
 ├── uninstall.ps1             Reverses install
 ├── dxmd-thread-fix.ini       Default config
+├── CHANGELOG.md              Release notes
 ├── LICENSE                   MIT
 └── README.md                 This file
+
+(generated; not tracked in git)
+├── build/                    Intermediate objects
+├── dist/                     Build output (dxgi.dll)
+└── release/                  Packaged release artifacts (zip + manifests)
 ```
 
 ---

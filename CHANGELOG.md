@@ -36,20 +36,24 @@ notorious alt-tab crash as a side effect of the same root-cause fix.
 - Source: https://github.com/dwenograd/dxmd-thread-fix
 - VERSIONINFO embedded in the DLL; right-click → Properties → Details
   should show ProductName "dxmd-thread-fix".
-- Imports only `KERNEL32.dll`; no network, registry-write, or process-
-  creation APIs.
-- Reads only `dxmd-thread-fix.ini` next to itself; writes only
+- The DLL imports only `KERNEL32.dll`; no network, registry-write, or
+  process-creation APIs.
+- The DLL reads only `dxmd-thread-fix.ini` next to itself; writes only
   `dxmd-thread-fix.log` next to itself (when `LogLevel > 0`).
+- The install/uninstall PowerShell scripts additionally read Steam's
+  registry install path for auto-detection, and write/copy/delete files
+  inside the game's `retail\` folder. They do not write to the registry
+  or contact the network.
 - Vendors MinHook 1.3.3 (BSD-2-Clause) unmodified; see
   `third_party/minhook/PROVENANCE.md` for the upstream tag and commit hash.
 
-### Three rounds of independent review
+### Six rounds of independent review
 
-Before release, the codebase went through three rounds of parallel
-review using independent rubber-duck, code-review, and security-review
-agents. Each round resulted in a hardening pass; the third round
-converged with all security reviews coming back clean and only minor
-docs/code mismatches remaining (since fixed).
+Before release, the codebase went through six rounds of parallel review
+using independent rubber-duck, code-review, and security-review agents
+covering correctness, security, edge cases, packaging, and
+documentation accuracy. Each round resulted in a hardening pass. Four
+independent security reviews all came back clean.
 
 ### Known limitations (documented, not bugs)
 
