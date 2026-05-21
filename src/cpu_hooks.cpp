@@ -193,21 +193,38 @@ static LPVOID resolve_target(const char* api) {
 int install_cpu_hooks(bool clamp_affinity) {
     g_clamp_affinity = clamp_affinity;
 
+    bool we_initialized_mh = false;
     MH_STATUS s = MH_Initialize();
-    if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
+    if (s == MH_OK) {
+        we_initialized_mh = true;
+    } else if (s != MH_ERROR_ALREADY_INITIALIZED) {
         log_line("ERROR: MH_Initialize failed: %d", (int)s);
         return -1;
     }
 
-    // Two-pass install:
-    //   Pass 1: CreateHook for every spec; collect (target, tramp) pairs.
-    //           Required hooks must all succeed. Optional hooks may fail.
-    //   Pass 2: EnableHook for everything created in pass 1, atomically.
+    // Three-pass install for clean fail semantics:
+    //   Pass 1: MH_CreateHook for every spec; collect (target, tramp).
+    //           Required hooks must all create successfully. Optional
+    //           hooks may fail (logged and skipped).
+    //   Pass 2: Publish the trampoline pointers to the g_real_* globals
+    //           that detours dereference.
+    //   Pass 3: MH_EnableHook(MH_ALL_HOOKS) to activate all hooks.
     //
-    // Two-pass is required because we treat required hooks as
-    // all-or-nothing: if any required hook fails to CREATE, we must
-    // tear down anything we already created (else the game sees mixed
-    // real/fake topology).
+    // Note on "atomic" enable: MH_EnableHook(MH_ALL_HOOKS) is NOT a
+    // database-transaction-style atomic operation. MinHook enables
+    // hooks one at a time internally and stops on the first error,
+    // leaving previously-enabled hooks live. For our DXMD use case
+    // that's fine because:
+    //   - We're called from DllMain, before any game worker threads
+    //     exist; no concurrent caller can observe a partial state.
+    //   - On any EnableHook failure we proactively DisableHook all and
+    //     RemoveHook all to leave the process in a clean state.
+    //
+    // Why publish trampolines BEFORE EnableHook (not after): if we
+    // published after, there'd be a window between "hook is live" and
+    // "trampoline pointer is set" during which a detour firing would
+    // call through a null g_real_* and crash. Publishing first
+    // eliminates that window.
     struct Created {
         LPVOID      target;
         const char* api_name;
@@ -221,6 +238,7 @@ int install_cpu_hooks(bool clamp_affinity) {
     int n_required_created = 0;
     int n_required_total = 0;
 
+    // --- Pass 1: create all hooks --------------------------------------
     for (const auto& spec : g_hook_specs) {
         if (spec.always_install) n_required_total++;
 
@@ -254,10 +272,6 @@ int install_cpu_hooks(bool clamp_affinity) {
             continue;
         }
 
-        // Publish the trampoline BEFORE EnableHook. The detour can't run
-        // yet (hook isn't enabled), but the order is documented as
-        // safer and the cost is zero.
-        *spec.pp_trampoline = tramp;
         created[n_created++] = Created{
             target, spec.api_name, spec.always_install,
             spec.pp_trampoline, tramp, spec.detour
@@ -271,13 +285,20 @@ int install_cpu_hooks(bool clamp_affinity) {
         goto fail;
     }
 
-    // Pass 2: enable everything in one go. MH_EnableHook(MH_ALL_HOOKS)
-    // is atomic w.r.t. enabling - all hooks become live together, so
-    // there's no window where some are live and others aren't.
+    // --- Pass 2: publish all trampoline pointers -----------------------
+    for (int i = 0; i < n_created; ++i) {
+        *created[i].pp_trampoline = created[i].trampoline;
+    }
+
+    // --- Pass 3: enable all hooks --------------------------------------
     {
         MH_STATUS es = MH_EnableHook(MH_ALL_HOOKS);
         if (es != MH_OK) {
             log_line("ERROR: MH_EnableHook(MH_ALL_HOOKS) failed: %d; aborting.", (int)es);
+            // Best-effort: turn off anything that did get enabled
+            // (MinHook may have enabled some before failing on the
+            // current target).
+            MH_DisableHook(MH_ALL_HOOKS);
             goto fail;
         }
     }
@@ -291,10 +312,16 @@ int install_cpu_hooks(bool clamp_affinity) {
     return 0;
 
 fail:
-    // Tear down anything we created.
+    // Tear down anything we created. RemoveHook also disables if needed.
     for (int i = 0; i < n_created; ++i) {
         MH_RemoveHook(created[i].target);
         *created[i].pp_trampoline = nullptr;
+    }
+    // If WE called MH_Initialize during this attempt, undo it. (If
+    // MinHook was already initialized when we entered, someone else
+    // owns it and we leave it alone.)
+    if (we_initialized_mh) {
+        MH_Uninitialize();
     }
     return -1;
 }

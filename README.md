@@ -1,218 +1,691 @@
 # dxmd-thread-fix
 
-A drop-in `dxgi.dll` shim that fixes the high-core-CPU crash in
-**Deus Ex: Mankind Divided** (build 1.19, the final Aug 2017 patch).
+> A tiny `dxgi.dll` shim that fixes the long-standing high-core-CPU
+> crash in **Deus Ex: Mankind Divided** (build 1.19, the final 2017
+> patch). It also fixes the alt-tab crash as a side effect.
+>
+> Drop two files next to `DXMD.exe`, launch the game. That's it.
 
-This is a *real* fix, not an affinity workaround. It hooks the Windows
-CPU-discovery APIs (`GetSystemInfo` and friends) so the game and its
-middleware (`bink2w64.dll`, `amd_ags64.dll`, `ApexFramework_x64.dll`,
-PhysX, ...) see a sane logical-processor count and size their thread
-pools accordingly. The game stops spawning more threads than it can
-manage, and the crash stops happening.
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform: Windows x64](https://img.shields.io/badge/platform-Windows%20x64-blue.svg)](#supported-platforms)
+[![Game version: 1.19 (final)](https://img.shields.io/badge/DXMD-1.19%20%28final%29-orange.svg)](#supported-platforms)
 
-Tested on a Threadripper 3970X (32C/64T). Should work on any high-core
-CPU including the 96C/192T+ ones that arrived after DXMD's last patch.
+---
 
-## Why this is different from Process Lasso / `start /affinity`
+## Table of contents
 
-The popular workarounds (Process Lasso, `start /affinity FF`, BES,
-Task Manager affinity) constrain *where* the game's 64 threads can run.
-The game still spawns 64 threads — it just crams them onto 8 cores.
+- [Should you trust this DLL?](#should-you-trust-this-dll)
+- [What it does (and doesn't do)](#what-it-does-and-doesnt-do)
+- [Quick install](#quick-install)
+- [Verifying the fix is active](#verifying-the-fix-is-active)
+- [Uninstall](#uninstall)
+- [Configuration](#configuration)
+- [Compatibility](#compatibility)
+- [Troubleshooting](#troubleshooting)
+- [Theory of operation](#theory-of-operation)
+- [Building from source](#building-from-source)
+- [Project layout](#project-layout)
+- [Reporting bugs](#reporting-bugs)
+- [License](#license)
+- [Acknowledgements](#acknowledgements)
 
-If the underlying bug is a fixed-size internal buffer indexed by CPU
-count, those workarounds can still die. They also require an external
-tool or wrapper per launch.
+---
 
-This shim lies to the game about how many CPUs exist. The game sees
-8 (configurable), spawns 8 worker threads, and that's the end of the
-story. No external launcher, no per-game-launch fiddling, no leftover
-process running in the background.
+## Should you trust this DLL?
 
-## Install
+A DLL from the internet that loads into your game and patches Windows
+APIs is exactly the kind of thing you should be suspicious of. Here's
+what to verify before you decide:
 
-1. Build `dxgi.dll` (or grab a release zip — see below).
-2. Drop **`dxgi.dll`** and **`dxmd-thread-fix.ini`** into your DXMD
-   install's `retail\` folder, next to `DXMD.exe`. Typical Steam path:
-   ```
-   <SteamLibrary>\steamapps\common\Deus Ex Mankind Divided\retail\
-   ```
-3. Launch DXMD normally (through Steam).
-4. Check `retail\dxmd-thread-fix.log` to verify the hook engaged. You
-   should see lines like `GetSystemInfo: 64 -> 8`.
+### Reading the source
 
-The included `install.ps1` does steps 1-3 automatically and can
+Everything is in this repo. The total size is ~1,300 lines of our own
+code, plus ~95 KB of [MinHook][mh] for the hook installation. The
+files that matter:
+
+- [`src/dllmain.cpp`](src/dllmain.cpp) — entry point, ~190 lines
+- [`src/dtf_traps.cpp`](src/dtf_traps.cpp) — pre-resolve trap functions, ~100 lines
+- [`src/dxgi_exports.cpp`](src/dxgi_exports.cpp) — proxy plumbing, ~100 lines
+- [`src/dxgi_stubs.asm`](src/dxgi_stubs.asm) — 20 tail-jump stubs
+- [`src/cpu_hooks.cpp`](src/cpu_hooks.cpp) — the actual API hooks, ~290 lines
+- [`src/topology.cpp`](src/topology.cpp) — fake CPU topology state, ~75 lines
+- [`src/config.cpp`](src/config.cpp), [`src/log.cpp`](src/log.cpp) — config & log
+
+[mh]: https://github.com/TsudaKageyu/minhook
+
+### What the DLL is *allowed* to do (and what it isn't)
+
+Imports tell you what a DLL can possibly do. Ours imports **only
+`KERNEL32.dll`** — no networking, no registry writes, no process
+creation, no shell execution. You can verify this yourself:
+
+```powershell
+dumpbin.exe /imports dxgi.dll
+```
+
+You'll see APIs from these categories:
+
+| Category | Examples | Why it's needed |
+|---|---|---|
+| File I/O | `CreateFileW`, `WriteFile` | Reading `dxmd-thread-fix.ini`, writing `dxmd-thread-fix.log` |
+| Module loading | `LoadLibraryExW`, `GetProcAddress`, `GetModuleHandleW` | Loading the real `System32\dxgi.dll` to forward calls |
+| Synchronization | `InitializeCriticalSection`, `EnterCriticalSection` | Thread-safe log writes |
+| Code patching | `VirtualProtect`, `FlushInstructionCache` | Required by MinHook to install API hooks |
+| Thread management | `SuspendThread`, `ResumeThread`, `GetThreadContext` | Required by MinHook to safely patch code under other threads |
+| Exception/CRT | `IsDebuggerPresent`, `SetUnhandledExceptionFilter` | Brought in by MSVC's static C runtime; not used by our code |
+
+What you should **not** see (and won't):
+
+- Anything from `ws2_32`, `wininet`, `winhttp`, `urlmon` (no networking)
+- Anything from `advapi32.RegCreateKey*`, `Reg*Value*` (no registry writes)
+- Anything from `kernel32.CreateProcess*`, `shell32.ShellExecute*` (no process launching)
+
+### What it writes to disk
+
+Exactly two files, both in the `retail\` folder next to `DXMD.exe`:
+
+- `dxmd-thread-fix.log` — diagnostic log of this run (overwritten each launch)
+- `dxmd-thread-fix.ini` — your config (only if absent; never clobbered)
+
+Nothing in `Documents/`, nothing in `%APPDATA%`, no registry keys, no
+network requests. Your saves, your `PSOCache.bin`, your Steam Cloud,
+your achievements — all untouched.
+
+### Reproducible build
+
+The full build is one PowerShell script:
+
+```powershell
+pwsh -File build.ps1
+```
+
+The output is `dist\dxgi.dll`. The script prints the SHA-256 at the
+end. **Caveat:** MSVC embeds timestamps, GUIDs, and absolute paths
+into the PE, so two builds on two machines won't be byte-identical
+even from the same source — that's a known MSVC quirk, not a Trojan
+indicator. What you *can* verify identically is:
+
+- The exports table (`dumpbin /exports dxgi.dll`) — exactly 20 exports, exact ordinals matching System32 dxgi.
+- The import table (`dumpbin /imports dxgi.dll`) — only kernel32.
+- The function signatures of our hook detours (read `src/cpu_hooks.cpp`).
+
+For each official release we publish:
+- The git commit tag
+- The SHA-256 of the released `dxgi.dll`
+- The `dumpbin /headers` and `/exports` output as text files alongside the release
+
+If a third party publishes a `dxgi.dll` *claiming* to be ours, hash it
+against the GitHub release. If it doesn't match — don't run it.
+
+### MinHook provenance
+
+[MinHook][mh] is vendored unmodified in `third_party/minhook/`. See
+[`third_party/minhook/PROVENANCE.md`](third_party/minhook/PROVENANCE.md)
+for the upstream URL, the exact tag (`v1.3.3`), the tag's commit hash
+(`9fbd087432700d73fc571118d6a9697a36443d88`), and the exhaustive list
+of MinHook APIs our code calls.
+
+### What we're *not* claiming
+
+This DLL is **not** code-signed — we can't afford a code-signing
+certificate, and self-signing is worse than nothing for trust. That
+means Windows SmartScreen may warn you when you download the zip, and
+some aggressive antivirus configurations may quarantine the DLL. See
+[Troubleshooting → AV / SmartScreen](#av--smartscreen).
+
+---
+
+## What it does (and doesn't do)
+
+### What it fixes
+
+DXMD 1.19 (the final 2017 patch) crashes on CPUs with high logical
+processor counts. The threshold is somewhere in the high teens. On a
+32C/64T Threadripper (or anything bigger), DXMD typically crashes
+within seconds — often before the title screen, often during the
+first zone load, sometimes when you alt-tab. The bug is one of the
+classic "this game was built before high-core CPUs were common"
+failure modes.
+
+This shim makes DXMD see a sane logical-processor count (default: 8)
+regardless of your actual CPU. It does so by intercepting the six
+Win32 APIs the game and its middleware (`bink2w64.dll`, `amd_ags64.dll`)
+use to discover the CPU topology, and rewriting the answers to be
+consistent with a smaller, single-group CPU.
+
+The game then sizes its thread pool sanely, the crash stops happening,
+and (as a side effect) the alt-tab crash also goes away — because
+that's a downstream symptom of the same thread-pool sizing issue.
+
+### What it does NOT fix
+
+DXMD has at least one other well-known crash bug — **rapid menu
+interaction** (inventory, looting, etc. clicked in fast sequence)
+will eventually crash the game. **That bug is not addressed by this
+mod.** It's a separate issue with a different root cause, and is
+explicitly out of scope here.
+
+This shim also doesn't:
+
+- Improve graphics quality, add DLSS/FSR, fix HDR, etc. (See [Compatibility](#compatibility) — you can stack a graphics mod on top.)
+- Modify the game's behaviour in any way other than what's described above.
+- Touch saves, achievements, multiplayer, or DRM.
+- Connect to the internet.
+
+### What about other games?
+
+This shim has been built and tested for DXMD only. The CPU-detection
+crash pattern affects other games too (Dishonored 2, some Frostbite
+titles, etc.), but I haven't tested or documented this fix against
+them. **The DLL has a host-process check and will refuse to install
+CPU hooks unless it's loaded inside `DXMD.exe`.** That's deliberate —
+it prevents accidental activation in unrelated apps.
+
+---
+
+## Quick install
+
+Three steps:
+
+1. Download the latest release from [Releases](#) (the zip contains
+   `dxgi.dll`, `dxmd-thread-fix.ini`, this README, and a SHA-256 manifest).
+2. **Right-click the zip → Properties → check "Unblock"** before
+   extracting, otherwise Windows may block the extracted files.
+3. Drop `dxgi.dll` and `dxmd-thread-fix.ini` into the game's `retail\`
+   subfolder, next to `DXMD.exe`. Typical Steam paths:
+   - `C:\Program Files (x86)\Steam\steamapps\common\Deus Ex Mankind Divided\retail\`
+   - `D:\Steam\steamapps\common\Deus Ex Mankind Divided\retail\`
+
+That's it. Launch DXMD through Steam normally. Verify it engaged
+([next section](#verifying-the-fix-is-active)).
+
+### Scripted install (optional)
+
+If you cloned the source repo, `install.ps1` does it for you and can
 auto-detect the Steam install location:
 
 ```powershell
 pwsh -File install.ps1
+# or with explicit path:
+pwsh -File install.ps1 -Game "C:\Games\Deus Ex Mankind Divided"
 ```
 
+The script:
+- Refuses to overwrite an existing `dxgi.dll` from a different mod
+  unless you pass `-Force` (in which case it backs the prior one up).
+- Refuses to install if DXMD is currently running.
+- Refuses to install if it can't write to `retail\` (e.g., game in
+  Program Files without admin).
+- Preserves your `dxmd-thread-fix.ini` if you've already customized it.
+
+---
+
+## Verifying the fix is active
+
+After launching DXMD, check the log file:
+
+```
+N:\Steam\steamapps\common\Deus Ex Mankind Divided\retail\dxmd-thread-fix.log
+```
+
+A working install looks like this:
+
+```
+[20:30:01.123] dxmd-thread-fix attach: loaded at module handle 00007FFD32100000
+[20:30:01.124] config: LogicalProcessors=8 ClampAffinity=0 LogLevel=1
+[20:30:01.124] Host process: N:\Steam\steamapps\common\Deus Ex Mankind Divided\retail\DXMD.exe
+[20:30:01.127] Real dxgi loaded: C:\WINDOWS\system32\dxgi.dll @ 00007FFD4CE00000
+[20:30:01.127] dxgi exports resolved: 20 ok, 0 missing.
+[20:30:01.127] Fake topology: 8 logical processors, 1 group(s)  (real: 64 in 1 group(s))
+[20:30:01.180] CPU hook install complete: 6 hooks active (6 required, 0 optional).
+[20:30:01.180]   Hooked GetSystemInfo @ 00007FFD514BD740 [required]
+[20:30:01.180]   Hooked GetNativeSystemInfo @ 00007FFD514BFB20 [required]
+... more "Hooked X" lines ...
+[20:30:01.180] ============================================================
+[20:30:01.180] FIX STATUS: ACTIVE  (reporting 8 logical processors to game)
+[20:30:01.180] ============================================================
+[20:30:01.191] GetSystemInfo: 64 -> 8
+```
+
+The line that matters: **`FIX STATUS: ACTIVE`**. The follow-up
+`GetSystemInfo: 64 -> 8` line (or similar — your "real" number depends
+on your CPU) shows the game actually called into our hook.
+
+If you see `FIX STATUS: INACTIVE` or a `FATAL:` line, the fix didn't
+install. Skip to [Troubleshooting](#troubleshooting).
+
+If you don't see a log file at all, see
+[Troubleshooting → No log file at all](#no-log-file-at-all).
+
+---
+
 ## Uninstall
+
+If you used `install.ps1`:
 
 ```powershell
 pwsh -File uninstall.ps1
 ```
 
-Or manually: delete `dxgi.dll`, `dxmd-thread-fix.ini`, and
-`dxmd-thread-fix.log` from `retail\`. The shader cache (`PSOCache.bin`)
-and your saves are untouched.
+It will:
+- Refuse to delete `dxgi.dll` if its SHA-256 doesn't match our build
+  (so it won't clobber ReShade/Special K if you installed those after).
+- Restore the most recent backup (if one exists from `install -Force`).
+- Clean up the `dxmd-thread-fix.log`.
 
-## Verify it's working
+If you installed manually, just delete:
+- `<game>\retail\dxgi.dll` (only if it's ours; check with `(Get-Item dxgi.dll).VersionInfo.ProductName` — should say "dxmd-thread-fix")
+- `<game>\retail\dxmd-thread-fix.ini`
+- `<game>\retail\dxmd-thread-fix.log`
 
-After launching DXMD, `retail\dxmd-thread-fix.log` should contain
-something like:
+Your saves, shader cache, and game files are untouched throughout.
 
-```
-[20:45:12.103] dxmd-thread-fix attach. config: LogicalProcessors=8 ClampAffinity=0 LogLevel=1
-[20:45:12.105] Real dxgi loaded: C:\WINDOWS\system32\dxgi.dll @ 00007FFD4CE00000
-[20:45:12.105] dxgi exports resolved: 20 ok, 0 missing.
-[20:45:12.106] Fake topology: 8 logical processors, 1 group(s)  (real: 64 in 1 group(s))
-[20:45:12.130] Hooked GetSystemInfo @ 00007FFD514BD740
-[20:45:12.131] GetSystemInfo: 64 -> 8
-... more "Hooked X" lines ...
-[20:45:12.180] CPU hook install complete: 6 active, 1 opt-skipped.
-```
-
-The `64 -> 8` line is the smoking gun — that's the game's own CPU
-detection being lied to.
-
-If you don't see a log file at all, the shim didn't load. Most likely
-cause: another mod is already proxying `dxgi.dll` (Special K, ReShade,
-ENB). See [Compatibility](#compatibility) below.
+---
 
 ## Configuration
 
-Edit `dxmd-thread-fix.ini` next to `dxgi.dll`. Defaults work for almost
-everyone.
+Edit `dxmd-thread-fix.ini` next to `dxgi.dll`. The defaults work for
+almost everyone.
 
 ```ini
 [ThreadFix]
-LogicalProcessors=8     ; how many CPUs to report to the game
+LogicalProcessors=8     ; how many CPUs to report to the game (1-64)
 ClampAffinity=0         ; 1 = also rewrite SetThreadAffinityMask calls
-LogLevel=1              ; 0=silent 1=startup+first-hit 2=verbose
+LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
 ```
 
-* **LogicalProcessors** — the community-validated sweet spot is `8`.
-  Some users report stability at `12`. If your CPU has fewer logical
-  processors than this value, your real count is reported (we never lie
-  *upward*).
-* **ClampAffinity** — leave at `0` unless your log shows
+- **`LogicalProcessors`** — community-validated sweet spot is `8`. Some
+  users report stability at `12`. The hard upper bound is `64` (a
+  Windows processor-group ceiling); higher values get silently clamped.
+  If your actual CPU has fewer logical processors than this, we report
+  your real count (we never lie *upward*).
+
+- **`ClampAffinity`** — leave at `0` unless your log shows
   `SetThreadAffinityMask` calls with masks outside the first
-  `LogicalProcessors` bits.
-* **LogLevel** — `1` is fine for normal use; `2` makes the log noisy
-  but is useful when filing a bug.
+  `LogicalProcessors` bits. Most users never need this.
+
+- **`LogLevel`** — `0` disables logging entirely (no log file is ever
+  created). `1` is the default and writes one line per hooked API plus
+  the startup banner. `2` writes a line for every hooked call (very
+  noisy; only useful when filing a bug).
+
+---
 
 ## Compatibility
 
-| Mod / Tool | Works with this? |
-|---|---|
-| Steam overlay | ✅ Yes (Steam hooks the swapchain VTable, not `dxgi.dll` itself) |
-| Steam achievements | ✅ Yes (we don't touch save data or game code) |
-| ReShade (proxy = `dxgi.dll`) | ❌ Conflicts — both want to be `dxgi.dll`. See workaround below. |
-| ReShade (proxy = `d3d11.dll` or other) | ✅ Yes |
-| Special K | ❌ Conflicts — Special K also proxies `dxgi.dll`. |
-| ENBSeries | ❌ Conflicts (also proxies `dxgi.dll`). |
-| AMD/NVIDIA driver overlays | ✅ Yes |
+### Confirmed working
 
-**Workaround for `dxgi.dll`-proxy conflicts:** chain the proxies — load
-the other mod first (e.g. rename ours to `dxgi.dxmd-thread-fix.dll` and
-have the other proxy load us). Future v1.1 will likely add an
-alternative install mode that proxies `winmm.dll` instead, sidestepping
-the conflict.
+- **Steam version of DXMD** (the only place this has been tested).
+- **Steam overlay** — fine. Steam hooks the D3D swapchain VTable after
+  swapchain creation, which is orthogonal to our static-import proxy.
+- **NVIDIA / AMD GPUs** — both. No driver-specific behavior.
+- **Windows 10, Windows 11** — both.
+- **Threadripper 3970X (32C/64T)** — primary test platform, fix
+  developed against this hardware.
+
+### Expected to work (untested)
+
+- **Steam achievements** — we don't touch any Steam APIs, don't modify
+  save data, don't intercept achievement-relevant code paths. Expected
+  compatible, but not specifically verified.
+- **Smaller CPUs (8C/16T, 12C/24T)** — should be a harmless no-op
+  (we clamp our reported count downward to your real count).
+- **Larger CPUs (96C/192T+)** — the topology hooks return a
+  single-group, 8-CPU view, so should work.
+- **HDR via Special K** — Special K also uses a `dxgi.dll` proxy and
+  will conflict. See below.
+
+### Known conflicts
+
+| Other mod | Conflict | Workaround |
+|---|---|---|
+| ReShade (configured as `dxgi.dll` proxy) | Both want to be `dxgi.dll`. | Configure ReShade as `d3d11.dll` proxy instead. |
+| Special K | Both proxy `dxgi.dll`. | No good workaround currently. A future v1.1 may add a `winmm.dll` alt-proxy mode. |
+| ENBSeries | Both proxy `dxgi.dll`. | Use only one. |
+
+### Not supported
+
+- **Microsoft Store / Xbox Game Pass** install of DXMD — the app
+  sandbox blocks `dxgi.dll` proxying.
+- **Pirated copies** — we can't help if your install is itself broken
+  by a crack patcher.
+- **DXMD demo / older patches** — only build `1.19.801.0` (the final
+  2017 patch) has been tested. Earlier patches may differ in import
+  table layout.
+
+### Supported platforms
+
+| | Status |
+|---|---|
+| DXMD build | 1.19.801.0 (final 2017 patch) — required |
+| OS | Windows 10, Windows 11 — tested. Windows 7 SP1 / 8.1 — theoretically supported (the build targets Win7 SP1 minimum) but untested. |
+| Architecture | x64 — the only one DXMD ships in |
+| CPU | Any x86-64 CPU. The fix is most useful at 16+ logical processors but is harmless on smaller CPUs. |
+
+---
+
+## Troubleshooting
+
+### No log file at all
+
+If `dxmd-thread-fix.log` doesn't appear in `retail\` after launching
+the game, our DLL didn't load. Most common causes:
+
+1. **`LogLevel=0`** in the INI — we don't create a log file in silent
+   mode. Change to `LogLevel=1` and relaunch.
+2. **DLL not in `retail\`** — you put it in the wrong folder.
+   `dxgi.dll` must be next to `DXMD.exe`, not next to the launcher or
+   in the parent `Deus Ex Mankind Divided\` folder.
+3. **DLL blocked by antivirus** — see next section.
+4. **DLL blocked by Mark-of-the-Web** — see below.
+
+### AV / SmartScreen blocked the DLL
+
+Windows Defender, Norton, McAfee, Smart App Control on Windows 11, and
+other security tools sometimes block or quarantine unsigned DLLs that
+hook Windows APIs. Symptoms:
+
+- DLL silently disappears from `retail\` after a few minutes.
+- Or: game runs but the log file doesn't appear.
+- Or: an AV notification.
+
+Fixes (in order of preference):
+
+1. **Verify the SHA-256** of the released `dxgi.dll` against the hash
+   on the GitHub release page. If it matches, you have the genuine
+   article — your AV is a false positive.
+2. **Add an exception** for the `retail\` folder in your AV.
+3. **For Smart App Control on Windows 11**: open Windows Security →
+   App & browser control → Smart App Control → Off. (You can turn it
+   back on after testing, then re-allow the DLL specifically.)
+
+### Mark-of-the-Web blocks the PowerShell scripts
+
+If you downloaded the zip from a browser, Windows tags it as "from the
+internet". PowerShell may refuse to run the install/uninstall scripts.
+
+Fix: right-click the zip → Properties → check "Unblock" → Apply →
+*then* extract. Or run the scripts with explicit policy bypass:
+
+```powershell
+powershell.exe -ExecutionPolicy Bypass -File install.ps1
+```
+
+### `FIX STATUS: INACTIVE` in the log
+
+The DLL loaded but couldn't install at least one of the 6 required
+CPU-topology hooks. Possible causes:
+
+- Another tool (AppVerifier, ETW instrumentation, an AV runtime
+  shim) has already instrumented the same `kernel32` exports in a way
+  MinHook can't patch.
+- An unusual Windows version doesn't export one of the topology APIs
+  we need. (Should be impossible on Win10+, but possible on heavily
+  patched/custom systems.)
+
+The log will name the specific API that failed. Please [report it](#reporting-bugs)
+with the full log attached.
+
+### `FATAL: real dxgi could not be loaded`
+
+Our DLL loaded, but it couldn't open the real `C:\Windows\System32\dxgi.dll`
+to forward to. Causes:
+
+- AV blocking System32 dxgi loads (rare; major OS breakage).
+- Wrong Windows version (very old / Wine / partial-OS environments).
+- Disk error.
+
+The DLL deliberately returns `FALSE` from its entry point in this case,
+so the game shows a clean "DLL load failed" rather than crashing later.
+
+### Game launches normally but my crash still happens
+
+If the crash you're seeing is during **rapid menu interaction**
+(inventory, looting), this mod does not fix that bug. See
+[What it does NOT fix](#what-it-does-not-fix).
+
+If the crash happens during something else (combat, save/load, zone
+transition), please [report it](#reporting-bugs) with:
+- Full `dxmd-thread-fix.log`
+- Steam crash dump from `%LOCALAPPDATA%\CrashDumps\DXMD.exe.*.dmp`
+- Your CPU model and Windows version
+- What you were doing when it crashed
+- Whether it crashes consistently or intermittently
+
+### Steam "Verify integrity of game files"
+
+Steam's verify doesn't touch our files (they're not Steam-tracked) and
+doesn't restore deleted-by-us files (we don't delete any). It's safe
+to run with our shim installed.
+
+### Game update through Steam
+
+DXMD hasn't been updated since 2017 and Eidos Montréal no longer
+exists, so this is unlikely. If it ever happens and Steam adds its own
+`dxgi.dll` to `retail\`, ours will be overwritten — just reinstall
+the mod.
+
+---
 
 ## Theory of operation
 
-`dumpbin /imports DXMD.exe` reveals:
+### The bug we're fixing
 
-```
-KERNEL32.dll
-   GetSystemInfo
-   SetThreadAffinityMask
-   IsProcessorFeaturePresent
-   CreateThread
-   ...
-```
+`dumpbin /imports DXMD.exe` shows that the game calls
+`kernel32!GetSystemInfo` directly. That API returns a `SYSTEM_INFO`
+struct whose `dwNumberOfProcessors` field tells callers how many
+logical processors the system has. DXMD uses that number to size its
+internal worker-thread pool.
 
-`GetSystemInfo` fills a `SYSTEM_INFO` struct whose `dwNumberOfProcessors`
-field is what the game uses to size its worker thread pool. The
-middleware DLLs `bink2w64.dll` and `amd_ags64.dll` also import
-`GetSystemInfo`. Hooking that one API at its KernelBase implementation
-address catches every caller, because the OS loader follows
-forwarders during import resolution — both `kernel32.dll!GetSystemInfo`
-and `KernelBase.dll!GetSystemInfo` end up writing the same physical
-address into every IAT slot.
+On a 32C/64T CPU, `dwNumberOfProcessors == 64`. DXMD (and its
+middleware: `bink2w64.dll` and `amd_ags64.dll`, both of which also
+import `GetSystemInfo`) spawn thread pools sized for 64 workers, and
+something in that pipeline — most likely a fixed-size internal buffer
+indexed by CPU index — overflows or races. The result is a crash, often
+within seconds of launch.
 
-So the fix is:
-1. **Get loaded into the DXMD process early.** DXMD already statically
-   imports `dxgi.dll`. Drop our `dxgi.dll` into the EXE's directory and
-   the OS loader picks it up first (standard DLL search order).
-2. **Forward every real `dxgi.dll` export.** We resolve all 20 exports
-   from `C:\Windows\System32\dxgi.dll` at load time and tail-jump
-   through them via assembly stubs. Ordinals are preserved exactly.
-3. **Hook the CPU-discovery APIs** using [MinHook][mh]. We cover:
-   `GetSystemInfo`, `GetNativeSystemInfo`, `GetActiveProcessorCount`,
-   `GetMaximumProcessorCount`, `GetActiveProcessorGroupCount`,
-   `GetMaximumProcessorGroupCount`. Every hook returns values
-   consistent with one fake topology (1 group, N logical processors)
-   so middleware that consults multiple APIs gets coherent answers.
-4. **Lie consistently.** `dwNumberOfProcessors`, `dwActiveProcessorMask`,
-   the per-group counts, the group count — all agree.
+The reason existing community workarounds (Process Lasso, `start /affinity`,
+BES, Task Manager affinity) don't reliably fix this: they constrain
+*where* the 64 threads can run, but the game still *spawns 64 threads*.
+If the bug is in the spawning/sizing path (which the symptoms strongly
+suggest), affinity workarounds don't help.
 
-[mh]: https://github.com/TsudaKageyu/minhook
+### The fix
 
-The shim is loader-lock-safe in practice: at the moment our `DllMain`
-runs, the only thread is the one processing DXMD's static imports, so
-MinHook's `SuspendThread`-on-all-others enumerates no other threads.
-This pattern is what every dxgi-proxy game mod uses (Special K,
-ReShade, ENB) and is well-validated across thousands of games.
+Hook the CPU-detection APIs and lie about the count.
 
-## Build from source
+The challenge is **getting loaded into the game process early enough
+that our hooks are live before the game calls `GetSystemInfo`**. DXMD
+statically imports `dxgi.dll`, which means the Windows loader resolves
+`dxgi.dll` (using standard DLL search order) before running DXMD's
+entry point. By placing our `dxgi.dll` in DXMD's own directory
+(`retail\`), we get loaded first — earlier than any of DXMD's own
+threads or worker code runs.
 
-Requires Windows + Visual Studio 2022 (Community is fine) with the
-"Desktop development with C++" workload installed (provides cl.exe,
-ml64.exe, link.exe).
+This requires us to be a faithful drop-in replacement for `dxgi.dll`:
+the loader will resolve all 20 of DXMD's dxgi imports through us, and
+we have to forward each one correctly to the real `C:\Windows\System32\dxgi.dll`.
+That's the `src/dxgi_stubs.asm` file — 20 single-instruction tail jumps,
+one per dxgi export, each routed through a pointer that our DllMain
+overwrites with the real System32 dxgi address.
+
+Once our DllMain runs, we use [MinHook][mh] to install inline detours
+on the 6 CPU-discovery APIs (`GetSystemInfo`, `GetNativeSystemInfo`,
+`GetActiveProcessorCount`, `GetMaximumProcessorCount`,
+`GetActiveProcessorGroupCount`, `GetMaximumProcessorGroupCount`). When
+DXMD or its middleware calls any of them, our detour runs first and
+returns numbers consistent with a fake "8 logical processors, 1 group"
+topology.
+
+### The subtle bit
+
+The Windows loader's app-compatibility shim layer (`apphelp.dll`)
+runs a compat-fixup pass on every loaded DLL **before** running the
+DLL's entry point. For dxgi specifically, that pass calls some of
+dxgi's compat exports (notably `SetAppCompatStringPointer`) to apply
+OS-level fixups.
+
+If our dxgi export stubs jumped through null pointers at that point,
+the process would crash inside `apphelp.dll` before our DllMain ever
+got a chance to run. We've solved this by initializing every stub's
+target pointer at compile time to a no-op trap function defined in
+`src/dtf_traps.cpp` — so the stubs always land on valid code. Apphelp
+asks "did you handle this compat string?", our trap returns 0 ("yes,
+all good"), and the loader proceeds to run our DllMain, which
+overwrites the trap pointers with the real System32 dxgi addresses.
+
+This is exactly the issue the first attempt at this mod tripped on,
+and is documented at length in [`src/dtf_traps.cpp`](src/dtf_traps.cpp).
+
+### Why we hook 6 APIs, not just `GetSystemInfo`
+
+Even though DXMD itself only imports `GetSystemInfo`, middleware
+(`bink2w64.dll`, `amd_ags64.dll`, possibly Apex/PhysX) may dynamically
+resolve other CPU-discovery APIs through `GetProcAddress`. Hooking
+all 6 with a consistent fake topology means everyone in the process
+gets the same lie — there's no code path that sees 8 from one API
+and 64 from another.
+
+The 6 hooks are treated as an **all-or-nothing required set**: if any
+of them fails to install, we tear down the others and log
+`FIX STATUS: INACTIVE` so the user can see clearly that the fix isn't
+applied (rather than running the game with a half-applied fix that
+might still crash).
+
+---
+
+## Building from source
+
+### Prerequisites
+
+- **Windows 10 or 11** (64-bit)
+- **Visual Studio 2022** (Community is fine), with the
+  **"Desktop development with C++"** workload installed. This provides
+  the toolchain we need: `cl.exe`, `link.exe`, `ml64.exe`, `rc.exe`.
+  Other compilers (GCC, Clang) are not supported.
+- **PowerShell 5.1 or 7+** (5.1 ships with Windows).
+
+### Build
 
 ```powershell
-git clone https://github.com/<you>/dxmd-thread-fix.git
+git clone https://github.com/<owner>/dxmd-thread-fix.git
 cd dxmd-thread-fix
 pwsh -File build.ps1
-pwsh -File install.ps1
 ```
 
-Output: `dist\dxgi.dll` (~150 KB).
+Output:
+- `dist\dxgi.dll` — ~150 KB. The artifact you'd install or distribute.
+- `dist\dxgi.pdb` — debug symbols (Release build still produces them).
+
+The script prints the SHA-256 of the built DLL at the end. Self-builds
+are not expected to match the SHA-256 of official releases byte-for-byte
+(MSVC embeds machine-specific data into PE files). What you can verify
+is the export table:
+
+```powershell
+dumpbin /exports dist\dxgi.dll
+```
+
+— it should show exactly the same 20 names and ordinals as
+`C:\Windows\System32\dxgi.dll`.
+
+### Build flags
+
+The Release build uses:
+
+- `/O2 /Oi /GL /MT` — optimize for speed, enable intrinsics, link-time
+  code gen, static CRT (so no MSVC runtime DLL dependency on the user's machine).
+- `/GS /sdl` — stack-buffer security checks and additional SDL checks.
+- `/W4 /EHsc /std:c++17` — high warning level, EH semantics, C++17.
+- `/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT` — explicit security mitigations.
+- **No `/guard:cf`** — Control Flow Guard is incompatible with MinHook's
+  runtime code patching (CFG would reject the patched function pointers).
+
+### Install (for testing)
+
+```powershell
+pwsh -File install.ps1
+# or
+pwsh -File install.ps1 -Game "C:\Path\To\Deus Ex Mankind Divided"
+```
+
+### Uninstall
+
+```powershell
+pwsh -File uninstall.ps1
+```
+
+---
 
 ## Project layout
 
 ```
-src/
-  dllmain.cpp        - DLL entry point, attach/detach sequence
-  config.cpp/.h      - INI parsing via GetPrivateProfileIntW
-  log.cpp/.h         - thread-safe append-only logger
-  topology.cpp/.h    - single source of truth for the fake CPU topology
-  dxgi_exports.cpp   - loads real dxgi, resolves all 20 export pointers
-  dxgi_exports.h
-  dxgi_stubs.asm     - one tail-jump stub per export
-  dxgi.def           - module-def file: names + ordinals
-  cpu_hooks.cpp/.h   - MinHook detours for the topology APIs
-third_party/
-  minhook/           - vendored MinHook 1.3.3 (BSD-2-Clause)
-build.ps1            - MSVC build
-install.ps1          - copy dxgi.dll + ini into DXMD's retail/
-uninstall.ps1        - reverse of install
-dxmd-thread-fix.ini  - default config
+dxmd-thread-fix/
+├── src/
+│   ├── dllmain.cpp           Entry point + attach/detach sequence
+│   ├── dtf_traps.cpp         Pre-resolve trap functions for the dxgi stubs
+│   ├── dxgi_exports.cpp      pfn_FOO globals + load_system_dxgi_and_resolve()
+│   ├── dxgi_exports.h
+│   ├── dxgi_stubs.asm        20 tail-jump stubs (one per dxgi export)
+│   ├── dxgi.def              Module-def file: exports by name AND ordinal
+│   ├── cpu_hooks.cpp         MinHook detour install + the 6 hook bodies
+│   ├── cpu_hooks.h
+│   ├── topology.cpp          Single source of truth for the fake topology
+│   ├── topology.h
+│   ├── config.cpp            INI parsing via GetPrivateProfileIntW
+│   ├── config.h
+│   ├── log.cpp               Thread-safe append-only file logger
+│   ├── log.h
+│   └── version.rc            Embedded VERSIONINFO resource
+├── third_party/
+│   └── minhook/              Vendored MinHook 1.3.3 (BSD-2-Clause)
+│       └── PROVENANCE.md     Upstream URL, tag, commit hash, API call list
+├── build.ps1                 One-shot MSVC build script
+├── install.ps1               Copies dxgi.dll + ini into game's retail\
+├── uninstall.ps1             Reverses install
+├── dxmd-thread-fix.ini       Default config
+├── LICENSE                   MIT
+└── README.md                 This file
 ```
+
+---
+
+## Reporting bugs
+
+GitHub Issues are the right place. Please include:
+
+- Your CPU model (especially logical processor count)
+- Your Windows version (run `winver` → first line)
+- Your DXMD install source (Steam / Epic / other)
+- The full contents of `dxmd-thread-fix.log`
+- If the game crashed: the contents of `%LOCALAPPDATA%\CrashDumps\DXMD.exe.<pid>.dmp`
+  (the file may be several MB; please upload it somewhere and link rather
+  than pasting)
+- Which other mods (if any) you have installed
+- What you were doing when the crash happened
+- Whether it crashes consistently or intermittently
+
+If the issue is "the game crashes when I rapidly interact with menus" —
+that's the menu-interaction bug, which is not addressed by this mod.
+See [What it does NOT fix](#what-it-does-not-fix).
+
+---
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE).
 
 This project vendors MinHook (BSD-2-Clause). See
-[third_party/minhook/LICENSE.txt](third_party/minhook/LICENSE.txt).
+[`third_party/minhook/LICENSE.txt`](third_party/minhook/LICENSE.txt).
+
+---
 
 ## Acknowledgements
 
-* [Tsuda Kageyu](https://github.com/TsudaKageyu) for MinHook.
-* The Steam Community / r/Deusex / PCGamingWiki threads that have been
-  trading affinity workarounds for this bug since 2017.
-* Eidos Montréal for one of the best immersive sims ever made,
-  even if they shipped it with this bug.
+- **[Tsuda Kageyu](https://github.com/TsudaKageyu)** for [MinHook][mh] —
+  this fix would have been at least 10× more code without it.
+- The **Steam Community, /r/Deusex, and PCGamingWiki** threads that
+  have been trading affinity workarounds for this crash since 2017.
+- **Eidos Montréal** for one of the best immersive sims ever made,
+  even if they shipped it with this bug. It's a shame the studio is
+  gone; this game deserved more sequels.

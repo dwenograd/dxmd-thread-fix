@@ -1,12 +1,24 @@
 // log.h - append-only, thread-safe logger writing next to the DLL.
 //
 // Log levels:
-//   0 = silent (errors still written if level >= 0; effectively disabled)
-//   1 = startup + first-hit per API
-//   2 = verbose (every hooked call)
+//   0 = silent. No log file is created on disk. log_line() is a no-op.
+//   1 = startup + first-hit per API. Default. Tells you the fix engaged
+//       and which hooks installed; quiet thereafter.
+//   2 = verbose. Every hooked call writes a line. Noisy; useful only
+//       when filing a bug report.
 //
-// First-hit logging uses one atomic flag per API; verbose logging takes
-// the critical section per line.
+// Log lifecycle:
+//   - log_init_deferred(self) is called at the very top of DllMain
+//     attach so we know WHERE the log file would go, but the file is
+//     NOT opened yet.
+//   - log_set_level(level) is called after config is parsed. If level
+//     > 0, this opens (and truncates) the log file for the first time.
+//   - log_line() takes the critical section, opens-appends-closes the
+//     file for each call (so writes are durable and survive crashes).
+//
+// Thread safety: log_line() takes a critical section per call.
+// log_init_*, log_set_level, log_open, log_shutdown are intended to be
+// called from DllMain and assume single-threaded execution there.
 
 #pragma once
 

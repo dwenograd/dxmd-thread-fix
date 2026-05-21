@@ -1,26 +1,50 @@
 # uninstall.ps1 - removes dxgi.dll + dxmd-thread-fix.ini from a DXMD install.
 #
-# Safety:
-#   - Only deletes dxgi.dll if its SHA-256 matches OUR built artifact.
-#     If the dxgi.dll in retail/ is a different mod (ReShade, Special K),
-#     this script refuses to delete it. Use -Force to override.
-#   - If a backup from install.ps1 -Force exists (dxgi.dll.bak-<timestamp>),
-#     restores the most recent one and cleans up all the others.
+# Identity model: same as install.ps1 — "ours" is identified by the
+# VERSIONINFO ProductName field embedded in the DLL ("dxmd-thread-fix").
+# This robustly recognizes any version of this tool, including upgrades
+# and downgrades.
+#
+# Force-flag semantics (designed to prevent accidental destruction of
+# other mods):
+#   no flags                -> safe default. Deletes the dxgi.dll ONLY IF
+#                              it's identifiably ours (VERSIONINFO check).
+#                              Refuses with a clear message otherwise.
+#   -DeleteForeignDxgi      -> EXPLICIT override. Deletes the dxgi.dll
+#                              even if it doesn't look like ours. Use
+#                              this if you're sure the foreign DLL is
+#                              dtf-without-VERSIONINFO or something
+#                              equivalent. ALWAYS prefer running this
+#                              from a fresh dtf checkout.
+#
+# Backup handling: if any dxgi.dll.bak-* files exist (from install.ps1
+# -Force backing up a foreign mod), restores the OLDEST backup. The
+# oldest is the original pre-DTF state — what the user wants back.
+# Then deletes ALL backups to keep retail\ tidy.
 #
 # Usage:
-#   pwsh -File uninstall.ps1                # auto-detect Steam install
-#   pwsh -File uninstall.ps1 -Game "..."    # manual path
-#   pwsh -File uninstall.ps1 -Force         # delete dxgi.dll even if it
-#                                           # doesn't match our hash
+#   pwsh -File uninstall.ps1
+#   pwsh -File uninstall.ps1 -Game "X:\Path\To\Deus Ex Mankind Divided"
+#   pwsh -File uninstall.ps1 -DeleteForeignDxgi
 
 param(
     [string]$Game,
-    [switch]$Force
+    [switch]$DeleteForeignDxgi
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSCommandPath
-$ourDll = Join-Path $root 'dist\dxgi.dll'
+
+function Test-IsOurs {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $vi = (Get-Item -LiteralPath $Path).VersionInfo
+        return $vi.ProductName -eq 'dxmd-thread-fix'
+    } catch {
+        return $false
+    }
+}
 
 function Find-DXMD {
     $steamPath = $null
@@ -68,34 +92,37 @@ if ($running) {
     throw "DXMD.exe is currently running (PID $($running.Id)). Close the game and try again."
 }
 
-# -- Identify our dxgi.dll by SHA-256 -----------------------------------
+# -- Identify the installed dxgi.dll ------------------------------------
 
 $dll = Join-Path $retail 'dxgi.dll'
 $ini = Join-Path $retail 'dxmd-thread-fix.ini'
 $log = Join-Path $retail 'dxmd-thread-fix.log'
 
 if (Test-Path -LiteralPath $dll) {
-    $theirHash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
-    $matches_ours = $false
-    if (Test-Path -LiteralPath $ourDll) {
-        $ourHash = (Get-FileHash -LiteralPath $ourDll -Algorithm SHA256).Hash
-        $matches_ours = ($theirHash -eq $ourHash)
-    }
-    if ($matches_ours) {
+    $isOurs = Test-IsOurs -Path $dll
+    if ($isOurs) {
+        $ver = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
         Remove-Item -LiteralPath $dll -Force
-        Write-Host "Removed: $dll" -ForegroundColor Green
-    } elseif ($Force) {
-        Write-Host "WARNING: $dll has SHA-256 $theirHash, which does NOT match our build." -ForegroundColor Yellow
-        Write-Host "         You passed -Force; deleting it anyway." -ForegroundColor Yellow
+        Write-Host "Removed: $dll (was dxmd-thread-fix v$ver)" -ForegroundColor Green
+    } elseif ($DeleteForeignDxgi) {
+        $product = ''
+        try { $product = (Get-Item -LiteralPath $dll).VersionInfo.ProductName } catch { }
+        Write-Host "WARNING: $dll does NOT identify as dxmd-thread-fix" -ForegroundColor Yellow
+        Write-Host "  VERSIONINFO ProductName: '$product'" -ForegroundColor Yellow
+        Write-Host "  You passed -DeleteForeignDxgi; deleting anyway." -ForegroundColor Yellow
         Remove-Item -LiteralPath $dll -Force
         Write-Host "Removed: $dll" -ForegroundColor Yellow
     } else {
+        $product = ''
+        try { $product = (Get-Item -LiteralPath $dll).VersionInfo.ProductName } catch { }
         Write-Host "REFUSING to delete $dll" -ForegroundColor Red
-        Write-Host "  Its SHA-256 is $theirHash" -ForegroundColor Red
-        Write-Host "  That does NOT match our build's SHA-256 - this is likely a DIFFERENT" -ForegroundColor Red
+        Write-Host "  Its VERSIONINFO ProductName is: '$product'" -ForegroundColor Red
+        Write-Host "  That is NOT 'dxmd-thread-fix' - this is likely a DIFFERENT" -ForegroundColor Red
         Write-Host "  mod (ReShade, Special K, ENB, ...) that also proxies dxgi.dll." -ForegroundColor Red
-        Write-Host "  Re-run with -Force to delete it anyway." -ForegroundColor Red
-        Write-Host ""
+        Write-Host "" -ForegroundColor Red
+        Write-Host "  If you are SURE this is meant to be dxmd-thread-fix (e.g. a build" -ForegroundColor Red
+        Write-Host "  too old to have VERSIONINFO), re-run with -DeleteForeignDxgi." -ForegroundColor Red
+        Write-Host "" -ForegroundColor Red
         Write-Host "  (Leaving dxmd-thread-fix.ini and dxmd-thread-fix.log alone too)" -ForegroundColor Red
         exit 1
     }
@@ -109,20 +136,22 @@ if (Test-Path -LiteralPath $log) {
     Write-Host "Removed: $log" -ForegroundColor Green
 }
 
-# -- Restore prior dxgi.dll from backup, clean all other backups --------
+# -- Restore the OLDEST backup (= pre-DTF original) and clean up --------
 
-$backups = Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue |
-    Sort-Object LastWriteTime -Descending
+$backups = @(Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue |
+    Sort-Object LastWriteTime)
 if ($backups.Count -gt 0) {
-    $latest = $backups[0]
-    Copy-Item -LiteralPath $latest.FullName -Destination $dll -Force
-    Write-Host "Restored prior dxgi.dll from $($latest.Name)" -ForegroundColor Yellow
-    # Clean up ALL backups including the restored one's source, so they
-    # don't accumulate across install cycles.
+    $oldest = $backups[0]
+    Copy-Item -LiteralPath $oldest.FullName -Destination $dll -Force
+    Write-Host "Restored pre-dxmd-thread-fix dxgi.dll from oldest backup:" -ForegroundColor Yellow
+    Write-Host "  $($oldest.Name)" -ForegroundColor Yellow
+    # Clean up ALL backups (including the one we just restored from).
     foreach ($bak in $backups) {
         Remove-Item -LiteralPath $bak.FullName -Force
     }
-    Write-Host "Cleaned $($backups.Count) backup file(s)." -ForegroundColor DarkGray
+    if ($backups.Count -gt 1) {
+        Write-Host "  Cleaned $($backups.Count) backup file(s)." -ForegroundColor DarkGray
+    }
 }
 
 Write-Host ""

@@ -46,7 +46,13 @@ extern "C" {
     void* pfn_DXGID3D10GetLayeredDeviceSize    = (void*)&dtf_trap_pre_resolve;
     void* pfn_DXGID3D10RegisterLayers          = (void*)&dtf_trap_pre_resolve;
     void* pfn_DXGIDeclareAdapterRemovalSupport = (void*)&dtf_trap_HRESULT_void;
-    void* pfn_DXGIDisableVBlankVirtualization  = (void*)&dtf_trap_HRESULT_void;
+    // DXGIDisableVBlankVirtualization is documented as HRESULT(HANDLE),
+    // not HRESULT(void). The generic trap ignores all parameters; using
+    // a typed trap with the wrong arg count would be safe-on-x64 (caller
+    // cleans the stack and we never read RCX) but technically an ABI
+    // mismatch. Generic trap returns 0 in RAX = S_OK if caller treats
+    // the return as HRESULT.
+    void* pfn_DXGIDisableVBlankVirtualization  = (void*)&dtf_trap_pre_resolve;
     void* pfn_DXGIGetDebugInterface1           = (void*)&dtf_trap_CreateDXGIFactory2;
     void* pfn_DXGIReportAdapterConfiguration   = (void*)&dtf_trap_pre_resolve;
 }

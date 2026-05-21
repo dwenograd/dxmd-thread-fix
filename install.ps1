@@ -1,23 +1,26 @@
 # install.ps1 - copies dxgi.dll + dxmd-thread-fix.ini into a DXMD install.
 #
+# Identity model:
+#   "Ours" is identified by the VERSIONINFO ProductName field embedded
+#   in our dxgi.dll ("dxmd-thread-fix"). This is more robust than a hash
+#   match — it correctly identifies any version of this tool, including
+#   upgrades and downgrades, without needing a hash manifest.
+#
+# Behavior:
+#   - No existing dxgi.dll        -> install our DLL.
+#   - Existing dxgi.dll is ours   -> overwrite silently (upgrade/reinstall).
+#   - Existing dxgi.dll is FOREIGN -> refuse unless -Force. With -Force,
+#     create a timestamped backup ONLY IF no backup already exists. The
+#     first backup is sacred — it's the user's original pre-DTF state
+#     (e.g. ReShade) — and we never overwrite it on subsequent upgrades.
+#
 # Usage:
 #   pwsh -File install.ps1
 #       (auto-detect Steam install)
 #   pwsh -File install.ps1 -Game "X:\Path\To\Deus Ex Mankind Divided"
 #       (manual path, for non-Steam or unusual installs)
 #   pwsh -File install.ps1 -Force
-#       (back up any existing dxgi.dll, even if it's not ours)
-#
-# What it does:
-#   1. Locate the game's retail\ folder.
-#   2. Verify it contains DXMD.exe and isn't running.
-#   3. Verify we can write to retail\.
-#   4. If a dxgi.dll is already there, compare its SHA-256 to ours:
-#        - same hash    -> ours, harmlessly overwrite
-#        - different    -> NOT ours (probably ReShade/Special K/ENB);
-#                          require -Force, back it up with a timestamp
-#   5. Copy dxgi.dll and (if missing) dxmd-thread-fix.ini.
-#   6. Print the next-step instructions.
+#       (overwrite a foreign dxgi.dll, backing it up if not already)
 
 param(
     [string]$Game,
@@ -30,13 +33,34 @@ $dll  = Join-Path $root 'dist\dxgi.dll'
 $ini  = Join-Path $root 'dxmd-thread-fix.ini'
 
 if (-not (Test-Path -LiteralPath $dll)) {
-    throw "Built dxgi.dll not found at $dll. Run build.ps1 first, or extract the release zip first."
+    throw @"
+Built dxgi.dll not found at:
+    $dll
+
+If you cloned the source repo: run build.ps1 first.
+If you downloaded a release zip: it should contain dxgi.dll directly; you can either:
+    (a) place dxgi.dll and dxmd-thread-fix.ini manually in <game>\retail\, or
+    (b) put dxgi.dll into a dist\ subfolder next to this script and re-run.
+"@
 }
 if (-not (Test-Path -LiteralPath $ini)) {
     throw "dxmd-thread-fix.ini not found at $ini."
 }
 
-# -- Auto-detect game install if not specified ---------------------------
+# -- Identity helper: is a given dxgi.dll "ours"? -----------------------
+
+function Test-IsOurs {
+    param([string]$Path)
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $vi = (Get-Item -LiteralPath $Path).VersionInfo
+        return $vi.ProductName -eq 'dxmd-thread-fix'
+    } catch {
+        return $false
+    }
+}
+
+# -- Auto-detect game install if not specified --------------------------
 
 function Find-DXMD {
     $steamPath = $null
@@ -97,7 +121,7 @@ if (-not (Test-Path -LiteralPath $exe)) {
     throw "DXMD.exe not at $exe. Pass -Game pointing at the folder that CONTAINS the 'retail' subdirectory."
 }
 
-# -- Pre-flight: is DXMD currently running? -----------------------------
+# -- Pre-flight: DXMD not running? --------------------------------------
 
 $running = Get-Process -Name 'DXMD' -ErrorAction SilentlyContinue
 if ($running) {
@@ -124,32 +148,45 @@ Underlying error: $($_.Exception.Message)
 "@
 }
 
-# -- SHA-256 identity check on any existing dxgi.dll --------------------
+# -- Identify and handle any existing dxgi.dll --------------------------
 
 $ourHash = (Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash
 $existingDxgi = Join-Path $retail 'dxgi.dll'
 $conflict = $false
 if (Test-Path -LiteralPath $existingDxgi) {
-    $theirHash = (Get-FileHash -LiteralPath $existingDxgi -Algorithm SHA256).Hash
-    if ($theirHash -eq $ourHash) {
-        Write-Host "Existing dxgi.dll matches our SHA-256; harmless reinstall, overwriting." -ForegroundColor DarkGray
+    if (Test-IsOurs -Path $existingDxgi) {
+        # Same tool, possibly different version. Safe to overwrite —
+        # no backup needed, no -Force needed, no surprises.
+        $existingVer = (Get-Item -LiteralPath $existingDxgi).VersionInfo.FileVersion
+        Write-Host "Existing dxgi.dll is dxmd-thread-fix v$existingVer; overwriting." -ForegroundColor DarkGray
     } else {
-        Write-Host "An EXISTING dxgi.dll is present but its SHA-256 does not match ours:" -ForegroundColor Yellow
-        Write-Host "  existing: $theirHash"
-        Write-Host "  ours    : $ourHash"
-        Write-Host "  Most likely this is another mod (Special K, ReShade, ENB) that also proxies dxgi.dll." -ForegroundColor Yellow
+        # Foreign DLL. Almost certainly another mod (ReShade, Special K,
+        # ENB). Do NOT overwrite without -Force.
+        $existingProduct = ''
+        try { $existingProduct = (Get-Item -LiteralPath $existingDxgi).VersionInfo.ProductName } catch { }
+        Write-Host "An EXISTING dxgi.dll is present that is NOT dxmd-thread-fix:" -ForegroundColor Yellow
+        if ($existingProduct) {
+            Write-Host "  ProductName: '$existingProduct'" -ForegroundColor Yellow
+        } else {
+            Write-Host "  (no VERSIONINFO ProductName embedded)" -ForegroundColor Yellow
+        }
+        Write-Host "  Most likely this is another mod (Special K, ReShade, ENB, ...)." -ForegroundColor Yellow
         if (-not $Force) {
-            throw "Aborting to avoid clobbering the other mod. Re-run with -Force to back it up (as dxgi.dll.bak-<timestamp>) and proceed."
+            throw "Aborting to avoid clobbering the other mod. Re-run with -Force to back it up (as dxgi.dll.bak-<timestamp>) and install ours on top."
         }
-        # Before making a new backup, clean any pre-existing dtf-style
-        # backups so they don't accumulate across install cycles.
-        Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue | ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Force
-            Write-Host "  Cleaned old backup: $($_.Name)" -ForegroundColor DarkGray
+        # With -Force: back up the foreign DLL, but ONLY IF we don't
+        # already have a backup. The first backup is the user's original
+        # pre-DTF state — we must never overwrite it on subsequent runs,
+        # because that's the file uninstall.ps1 needs to restore.
+        $existingBackups = @(Get-ChildItem -LiteralPath $retail -Filter 'dxgi.dll.bak-*' -File -ErrorAction SilentlyContinue)
+        if ($existingBackups.Count -gt 0) {
+            Write-Host "  $($existingBackups.Count) prior backup file(s) already present; preserving them." -ForegroundColor Yellow
+            Write-Host "  (The oldest backup is the original pre-DTF state.)" -ForegroundColor Yellow
+        } else {
+            $backup = "$existingDxgi.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+            Copy-Item -LiteralPath $existingDxgi -Destination $backup -Force
+            Write-Host "  Backed up foreign dxgi.dll -> $(Split-Path $backup -Leaf)" -ForegroundColor Yellow
         }
-        $backup = "$existingDxgi.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
-        Copy-Item -LiteralPath $existingDxgi -Destination $backup -Force
-        Write-Host "  Backed up existing dxgi.dll -> $backup" -ForegroundColor Yellow
         $conflict = $true
     }
 }
@@ -168,12 +205,14 @@ Write-Host "Installed:" -ForegroundColor Green
 Get-Item -LiteralPath (Join-Path $retail 'dxgi.dll') | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
 Get-Item -LiteralPath $dstIni | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize
 Write-Host "Our dxgi.dll SHA-256: $ourHash" -ForegroundColor DarkGray
+$ourVer = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
+Write-Host "Our dxgi.dll version: $ourVer" -ForegroundColor DarkGray
 
 if ($conflict) {
     Write-Host ""
     Write-Host "NOTE: another dxgi.dll mod was previously installed and has been backed up." -ForegroundColor Yellow
     Write-Host "      The two mods cannot coexist as both want to be dxgi.dll." -ForegroundColor Yellow
-    Write-Host "      Run uninstall.ps1 to restore the backup."  -ForegroundColor Yellow
+    Write-Host "      Run uninstall.ps1 to remove dxmd-thread-fix and restore the backup."  -ForegroundColor Yellow
 }
 Write-Host ""
 Write-Host "Launch DXMD; verify the fix engaged by checking:" -ForegroundColor Cyan
