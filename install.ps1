@@ -129,11 +129,32 @@ function Find-DXMD {
         Write-Host "Note: Steam libraryfolders.vdf not found at $vdf." -ForegroundColor Yellow
         return $null
     }
+    # Build the list of libraries to search.
+    # CRITICAL: always include $steamPath itself first. The primary
+    # Steam install directory is typically not listed in
+    # libraryfolders.vdf at all on older Steam versions, and on some
+    # newer ones it's only present as one entry among many. Including
+    # it explicitly guarantees we cover the most common case (single
+    # Steam library at the default install location).
+    $libs = @($steamPath)
     $content = Get-Content -LiteralPath $vdf -Raw
-    $libs = @()
+    # Parse new-style VDF "path" entries (Steam ~2019+).
     foreach ($m in [regex]::Matches($content, '"path"\s*"([^"]+)"')) {
         $libs += $m.Groups[1].Value -replace '\\\\', '\'
     }
+    # Parse OLD-style VDF entries from pre-2019 Steam:
+    #     "1"     "D:\\SteamLibrary"
+    #     "2"     "E:\\Games"
+    # i.e. numeric keys instead of "path". A user who hasn't restarted
+    # Steam in years could still have this layout. The regex looks
+    # for a quoted decimal-only key followed by a quoted value that
+    # looks like an absolute Windows path. False positives would be
+    # ignored by the Test-Path below.
+    foreach ($m in [regex]::Matches($content, '"\d+"\s*"([A-Za-z]:[^"]+)"')) {
+        $libs += $m.Groups[1].Value -replace '\\\\', '\'
+    }
+    # Dedup while preserving order (first match wins).
+    $libs = $libs | Select-Object -Unique
     foreach ($lib in $libs) {
         $candidate = Join-Path $lib 'steamapps\common\Deus Ex Mankind Divided'
         if (Test-Path -LiteralPath (Join-Path $candidate 'retail\DXMD.exe')) {

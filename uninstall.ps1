@@ -60,11 +60,19 @@ function Find-DXMD {
     if (-not $steamPath) { return $null }
     $vdf = Join-Path $steamPath 'steamapps\libraryfolders.vdf'
     if (-not (Test-Path -LiteralPath $vdf)) { return $null }
+    # Include $steamPath itself as the first library candidate (it's
+    # not always listed in libraryfolders.vdf), parse new-style "path"
+    # entries (Steam ~2019+), and old-style "<num>" entries (pre-2019).
+    # See install.ps1's equivalent logic for full rationale.
+    $libs = @($steamPath)
     $content = Get-Content -LiteralPath $vdf -Raw
-    $libs = @()
     foreach ($m in [regex]::Matches($content, '"path"\s*"([^"]+)"')) {
         $libs += $m.Groups[1].Value -replace '\\\\', '\'
     }
+    foreach ($m in [regex]::Matches($content, '"\d+"\s*"([A-Za-z]:[^"]+)"')) {
+        $libs += $m.Groups[1].Value -replace '\\\\', '\'
+    }
+    $libs = $libs | Select-Object -Unique
     foreach ($lib in $libs) {
         $candidate = Join-Path $lib 'steamapps\common\Deus Ex Mankind Divided'
         if (Test-Path -LiteralPath (Join-Path $candidate 'retail\DXMD.exe')) {

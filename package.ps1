@@ -47,6 +47,34 @@ if (-not (Test-Path -LiteralPath $dll)) {
     throw "dist\dxgi.dll not found. Run build.ps1 first or omit -SkipBuild."
 }
 
+# Version sanity check: the -Version parameter controls the zip
+# name, manifest filenames, and release-page hash output, but the
+# DLL itself is whatever was built (its FileVersion / ProductVersion
+# come from src\version.rc). If those don't match, a published
+# release with -Version 1.0.1 could ship a DLL still reporting
+# 1.0.0.0 in Properties → Details, which would confuse users and
+# break VERSIONINFO-based identity checks. Fail loudly here so the
+# packager has to update src\version.rc first.
+$dllVersion = (Get-Item -LiteralPath $dll).VersionInfo.FileVersion
+# DLL version strings are "1.0.0.0" (4 components); -Version may be
+# "1.0.0" (3 components). Normalize by stripping a single trailing
+# ".0" from the DLL version if needed.
+$dllVersionNormalized = $dllVersion
+if ($dllVersionNormalized -match '^(\d+\.\d+\.\d+)\.0$') {
+    $dllVersionNormalized = $matches[1]
+}
+if ($dllVersionNormalized -ne $Version -and $dllVersion -ne $Version) {
+    throw @"
+Version mismatch: -Version is '$Version' but the built dxgi.dll
+reports FileVersion '$dllVersion'.
+
+Update src\version.rc (DTF_VERSION and DTF_VERSION_STR), rebuild,
+and re-run package.ps1. The release zip name and the DLL's
+embedded version must agree, or users will see a mismatch in
+Properties -> Details.
+"@
+}
+
 # -- Stage the release content -----------------------------------------
 
 $release = Join-Path $root 'release'
