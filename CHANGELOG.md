@@ -49,11 +49,11 @@ notorious alt-tab crash as a side effect of the same root-cause fix.
 
 ### Multiple rounds of independent review
 
-Before release, the codebase went through multiple rounds of parallel
-review using independent rubber-duck, code-review, and security-review
-agents covering correctness, security, edge cases, packaging, and
-documentation accuracy. Each round resulted in a hardening pass. The
-security audits across all rounds came back clean.
+The codebase went through multiple rounds of parallel review using
+independent rubber-duck, code-review, and security-review agents
+covering correctness, security, edge cases, packaging, and
+documentation accuracy. Each round resulted in a hardening pass; the
+fixes from those reviews are included in this release.
 
 ### Known limitations (documented, not bugs)
 

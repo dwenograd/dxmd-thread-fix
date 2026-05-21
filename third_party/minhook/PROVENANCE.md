@@ -20,8 +20,9 @@ Invoke-WebRequest `
 ## What's vendored
 
 In the **source repository**, the upstream MinHook v1.3.3 source tree
-is mirrored in this directory. The repo tracks the subset our build
-links against, plus the upstream license and `include/`:
+is mirrored in this directory. The repo tracks every file our build
+needs to compile, plus the upstream license and the resource/def files
+that live in `dll_resources/`:
 
 ```
 include/MinHook.h
@@ -31,6 +32,8 @@ src/trampoline.c, trampoline.h
 src/hde/hde64.c, hde64.h
 src/hde/pstdint.h
 src/hde/table64.h
+dll_resources/MinHook.def
+dll_resources/MinHook.rc
 
 (also tracked, for completeness:)
 src/hde/hde32.c, hde32.h
@@ -38,12 +41,11 @@ src/hde/table32.h
 AUTHORS.txt, README.md, .editorconfig, .gitignore
 ```
 
-The upstream tree also contains ancillary `build/` and `dll_resources/`
-subdirectories used to build MinHook as a standalone DLL. We don't
-track those because:
-- our top-level `.gitignore` excludes `build/` (it's also the name of
-  our own intermediate-objects folder), and
-- we don't ship MinHook as a DLL — it's compiled directly into ours.
+We do NOT track upstream's `build/` directory (Visual Studio solution
+files and intermediate objects). It's excluded by the top-level
+`.gitignore`'s `build/` rule, which is also where our own intermediate
+objects go. We don't ship MinHook as a standalone DLL — it's compiled
+directly into ours — so the upstream `build/` projects aren't needed.
 
 The tracked files are unmodified upstream content. To verify, compare
 against the upstream tag by checksumming each file or re-running the

@@ -119,35 +119,43 @@ static bool ieq_ascii(const wchar_t* a, const wchar_t* b) {
 // Returns true if the current process executable's basename is "DXMD.exe".
 //
 // On extremely long install paths (longer than MAX_PATH wchars), the
-// fixed-size buffer here can't hold the path. Rather than fail closed
-// (which would silently skip CPU hooks and leave the user with a
-// crashing game and no obvious clue), we grow the buffer dynamically
-// in a small retry loop. This is the same shape as the recommended
-// GetModuleFileNameW pattern in MSDN.
+// fixed-size buffer pattern can't hold the path. Rather than fail
+// closed (which would silently skip CPU hooks and leave the user with
+// a crashing game and no obvious clue), we grow the buffer dynamically
+// up to 32K wchars. This is the same shape as the recommended
+// GetModuleFileNameW pattern in MSDN, with explicit allocation
+// ownership tracking so we don't leak on any error path.
 static bool host_is_dxmd() {
+    HANDLE heap = GetProcessHeap();
+    if (!heap) return false;
+    const DWORD MAX_BUF = 32 * 1024;  // 32K wchars = 64KB, well above any real path
     DWORD bufLen = MAX_PATH;
-    wchar_t* path = nullptr;
+    wchar_t* path = static_cast<wchar_t*>(HeapAlloc(heap, 0, bufLen * sizeof(wchar_t)));
+    if (!path) return false;
     DWORD n = 0;
-    for (int attempt = 0; attempt < 4; ++attempt) {
-        wchar_t* newPath = static_cast<wchar_t*>(
-            HeapReAlloc(GetProcessHeap(), 0, path, bufLen * sizeof(wchar_t)));
-        if (!newPath) newPath = static_cast<wchar_t*>(
-            HeapAlloc(GetProcessHeap(), 0, bufLen * sizeof(wchar_t)));
-        if (!newPath) { if (path) HeapFree(GetProcessHeap(), 0, path); return false; }
-        path = newPath;
+    bool success = false;
+    for (;;) {
         n = GetModuleFileNameW(nullptr, path, bufLen);
-        if (n == 0) { HeapFree(GetProcessHeap(), 0, path); return false; }
-        if (n < bufLen) break;  // success (n is the length, not buffer size)
-        // n == bufLen means truncation; double and retry.
-        bufLen *= 2;
-        if (bufLen > 32768) { HeapFree(GetProcessHeap(), 0, path); return false; }
+        if (n == 0) break;                          // API error
+        if (n < bufLen) { success = true; break; }  // fit (n is the length, not buffer size)
+        // n == bufLen means truncation. Grow and retry. Cap at MAX_BUF
+        // to avoid unbounded retry on a (theoretical) infinite path.
+        if (bufLen >= MAX_BUF) break;
+        DWORD newLen = bufLen * 2;
+        if (newLen > MAX_BUF) newLen = MAX_BUF;
+        wchar_t* newPath = static_cast<wchar_t*>(
+            HeapReAlloc(heap, 0, path, newLen * sizeof(wchar_t)));
+        if (!newPath) break;                        // realloc failed; keep old `path` for cleanup
+        path   = newPath;
+        bufLen = newLen;
     }
+    if (!success) { HeapFree(heap, 0, path); return false; }
     const wchar_t* base = path;
     for (DWORD i = 0; i < n; ++i) {
         if (path[i] == L'\\' || path[i] == L'/') base = &path[i + 1];
     }
     bool result = ieq_ascii(base, L"DXMD.exe");
-    HeapFree(GetProcessHeap(), 0, path);
+    HeapFree(heap, 0, path);
     return result;
 }
 
