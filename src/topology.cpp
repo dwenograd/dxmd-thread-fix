@@ -1,3 +1,28 @@
+// topology.cpp - implementation of the fake CPU topology described in
+// topology.h.
+//
+// set_topology() captures the REAL CPU counts (by calling the kernel32
+// APIs directly via GetProcAddress, bypassing any IAT) and stores both
+// the real values (for logging) and the clamped fake values that every
+// hooked API will report.
+//
+// CALL-ORDER REQUIREMENT (important — read this before refactoring):
+// set_topology() MUST be called BEFORE install_cpu_hooks(). Once our
+// inline detours are installed, GetProcAddress returns the patched
+// (detour) address, not the original implementation. Calling the
+// detour from set_topology would feed our own lies back into our
+// "real" topology, defeating the entire mechanism.
+//
+// The current attach() sequence in dllmain.cpp satisfies this order;
+// any future refactor that wants to call set_topology() after
+// install_cpu_hooks() would need to save the unhooked function
+// pointers separately, BEFORE the hooks are installed.
+//
+// Clamp chain: configured value -> min(configured, real_count) ->
+// min(that, 64). The 64-cap exists because we report a single
+// processor group, whose dwActiveProcessorMask is DWORD_PTR — 64 bits
+// on x64. A larger reported count would exceed the mask width.
+
 #include "topology.h"
 
 namespace dtf {

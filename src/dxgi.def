@@ -1,12 +1,21 @@
 ; dxgi.def - exact name + ordinal preservation for our proxy dxgi.dll.
 ;
 ; Ordinals here MUST match the System32 dxgi.dll on Windows 10+. They
-; were captured via `dumpbin /exports C:\Windows\System32\dxgi.dll`.
-; Any caller that resolves dxgi exports by ordinal (rare but it happens
-; in some graphics tooling) gets the right function.
+; were captured via `dumpbin /exports C:\Windows\System32\dxgi.dll`
+; and verified to match across our test installs.
+;
+; Why preserve ordinals (and not just names)?
+;   - Most callers (DXMD included) resolve dxgi exports by NAME via
+;     the IAT, so name preservation alone would suffice for them.
+;   - But some graphics tooling and a few less-common libraries do
+;     resolve by ORDINAL (especially the older D3D10-era code paths
+;     like DXGID3D10CreateDevice). For those, the ordinal must match.
+;   - Matching both is the conservative choice — costs us nothing,
+;     buys us compatibility with the long tail.
 ;
 ; Each export's implementation is the same-named symbol in dxgi_stubs.asm,
-; which tail-jumps to the runtime-resolved real-dxgi pointer.
+; which tail-jumps to the runtime-resolved real-dxgi pointer in
+; dxgi_exports.cpp. See src/DESIGN.md for the full proxy-DLL story.
 
 LIBRARY dxgi
 EXPORTS

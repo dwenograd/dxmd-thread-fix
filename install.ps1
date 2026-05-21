@@ -157,7 +157,21 @@ if ($running) {
 }
 
 # -- Pre-flight: can we write to retail/? -------------------------------
-
+#
+# Why we do this and not just "try the install and see if it fails":
+# the install touches dxgi.dll, which is the file the game depends on
+# to launch. A failed half-install (e.g. created the backup but
+# couldn't write the new DLL because the user wasn't an admin) would
+# leave the game broken until they figured out how to manually restore.
+# So instead we attempt to write a tiny temp file FIRST, fail with a
+# clear "you need admin / move the game out of Program Files" message
+# BEFORE touching any real files.
+#
+# The temp file name is `._dtf_writetest_<guid>.tmp` (GUID-random to
+# avoid colliding with anything else in retail/) and is deleted in the
+# same try block. A code-curious user will see this transient file
+# appear if they're watching retail/ during install and we want them
+# to be able to find this comment to understand what it was.
 $testFile = Join-Path $retail "._dtf_writetest_$([guid]::NewGuid().ToString('N')).tmp"
 try {
     [System.IO.File]::WriteAllText($testFile, "test")

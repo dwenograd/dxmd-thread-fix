@@ -1,3 +1,31 @@
+// cpu_hooks.cpp - implementation of install_cpu_hooks() and the
+// six MinHook detours for the CPU/topology APIs.
+//
+// THE THREE-PASS INSTALL (see install_cpu_hooks below):
+//   Pass 1: MH_CreateHook for every API; collect (target, tramp) in a
+//           local array. Don't publish the trampoline pointers to the
+//           g_real_* globals yet.
+//   Pass 2: Publish all trampoline pointers in one tight loop.
+//   Pass 3: MH_EnableHook(MH_ALL_HOOKS) makes everything live.
+//
+// Why three passes? Because if a later hook fails to create and we
+// jump to cleanup, the published-but-now-defunct g_real_* would point
+// at memory MinHook is about to free. Splitting "create" from "publish"
+// keeps the cleanup story trivial — nothing has been published yet
+// when Pass 1 fails.
+//
+// REQUIRED vs OPTIONAL hooks: the 6 topology APIs are an all-or-nothing
+// required set. If any one fails to install, the entire fix is torn
+// down and FIX STATUS: INACTIVE is logged. A half-applied fix is worse
+// than no fix — the game could see "8" from one API and "64" from
+// another and crash anyway, making the log misleading.
+// SetThreadAffinityMask is opt-in via INI; its install failure is
+// non-fatal.
+//
+// See cpu_hooks.h for the broader rationale (why we hook the
+// kernel32-resolved address, what's covered, what's acknowledged not
+// covered) and src/DESIGN.md for the full architectural story.
+
 #include "cpu_hooks.h"
 #include "topology.h"
 #include "log.h"
@@ -41,7 +69,21 @@ static PFN_GetActiveProcessorGroupCount  g_real_GetActiveProcessorGroupCount  = 
 static PFN_GetMaximumProcessorGroupCount g_real_GetMaximumProcessorGroupCount = nullptr;
 static PFN_SetThreadAffinityMask         g_real_SetThreadAffinityMask         = nullptr;
 
-// First-hit flags
+// First-hit flags. Each is an atomic 0/1 that goes from 0 to 1 the
+// first time the corresponding hooked API is called. Used to throttle
+// log output at LogLevel=1: log the FIRST call to each hooked API
+// (so you can see the hook fired and what value was rewritten), then
+// stay silent for that API.
+//
+// Without this throttling, LogLevel=1 would behave like LogLevel=2:
+// GetSystemInfo can be called thousands of times per second by some
+// middleware (frame-pacing checks, internal worker scheduling, etc.).
+// Logging every call would balloon the log to gigabytes per session
+// and make the disk I/O itself a problem.
+//
+// Implementation: InterlockedCompareExchange flips the flag from 0 to
+// 1 atomically. Whoever wins the CAS gets to log; everyone else sees
+// the flag already 1 and skips. See log.cpp::first_hit().
 static LONG volatile g_fh_GetSystemInfo                 = 0;
 static LONG volatile g_fh_GetNativeSystemInfo           = 0;
 static LONG volatile g_fh_GetActiveProcessorCount       = 0;
@@ -134,6 +176,48 @@ static WORD WINAPI Hooked_GetMaximumProcessorGroupCount(void) {
 }
 
 static DWORD_PTR WINAPI Hooked_SetThreadAffinityMask(HANDLE hThread, DWORD_PTR mask) {
+    // =================================================================
+    // UNUSUAL THING: we modify the affinity mask the caller asked for.
+    // =================================================================
+    //
+    // A code-curious reader looking at this will reasonably ask "wait,
+    // why is this DLL rewriting thread affinity?" Here's the concrete
+    // scenario we're guarding against, and why this hook is OPT-IN
+    // (ClampAffinity=0 in dxmd-thread-fix.ini by default):
+    //
+    // PROBLEM: We tell DXMD (via the other 6 hooks) that the system
+    // has only N logical processors (default 8). But the OS still
+    // really has 64+ CPUs. When DXMD or its middleware calls
+    // SetThreadAffinityMask with a bitmask, the bitmask is in REAL-
+    // CPU-numbering. If middleware asked for CPU 50 (because at some
+    // earlier point it saw 64 real CPUs through a path we didn't
+    // hook), the OS would happily pin the thread to CPU 50 — but our
+    // lie said CPUs only go up to 8. The thread runs anyway, but we
+    // have an inconsistency, and in pathological cases the middleware
+    // might decide nothing is running because it's polling on CPU
+    // indices it expects to see active.
+    //
+    // FIX (when ClampAffinity=1):
+    //   - Build `allowed` = the bitmask of the first N real CPUs
+    //     (the ones in our "fake" topology).
+    //   - Compute `intersected` = requested-mask AND allowed.
+    //   - If the requested mask had any overlap with allowed, use the
+    //     intersection (honors caller intent within our fake set).
+    //   - If the requested mask had NO overlap with allowed (caller
+    //     wanted ONLY high-numbered CPUs we lied about), fall back to
+    //     `allowed`. Passing 0 instead would cause the API to FAIL,
+    //     which middleware almost universally treats as fatal — the
+    //     thread either won't start or will run on whatever default
+    //     mask the OS picks. Better to honor the spirit of the call
+    //     by giving the thread SOMETHING runnable within our fake
+    //     topology.
+    //
+    // WHY OPT-IN BY DEFAULT: in practice, all our in-game testing on
+    // a 32C/64T Threadripper showed DXMD never asks for an affinity
+    // mask outside our fake range — the other 6 hooks suffice. Logging-
+    // only mode (ClampAffinity=0) lets users with weird setups discover
+    // whether they need to flip it on, without changing behavior for
+    // the 99% case.
     const auto& topo = topology();
     const DWORD_PTR allowed = first_n_bits_mask(topo.logical_processors);
     DWORD_PTR effective = mask;
@@ -200,6 +284,15 @@ static LPVOID resolve_target(const char* api) {
 int install_cpu_hooks(bool clamp_affinity) {
     g_clamp_affinity = clamp_affinity;
 
+    // MH_Initialize is idempotent — calling it on already-initialized
+    // MinHook returns MH_ERROR_ALREADY_INITIALIZED rather than crashing.
+    // We track whether WE were the ones to initialize, so that on a
+    // later failure-path we only call MH_Uninitialize if we actually
+    // own the MinHook lifetime. (If MinHook was already initialized
+    // when we entered, some other code in the process — extremely
+    // unlikely in DXMD but possible if e.g. another mod-loader
+    // pre-initialized MinHook — owns it and we don't want to tear
+    // its state down.)
     bool we_initialized_mh = false;
     MH_STATUS s = MH_Initialize();
     if (s == MH_OK) {
@@ -217,6 +310,24 @@ int install_cpu_hooks(bool clamp_affinity) {
     //           that detours dereference.
     //   Pass 3: MH_EnableHook(MH_ALL_HOOKS) to activate all hooks.
     //
+    // Why three passes instead of the obvious two (Create + Enable)?
+    //
+    // The "obvious" two-pass approach is what most MinHook tutorials
+    // show, and it almost works. But there's a window:
+    //
+    //   - Pass 1 succeeds for hooks 1-3, publishes g_real_1/2/3.
+    //   - Pass 1 fails for hook 4 → goto fail.
+    //   - Cleanup loop calls MH_RemoveHook(target_1) → MinHook FREES
+    //     the trampoline memory at g_real_1's value.
+    //   - g_real_1 now points at freed memory.
+    //
+    // Nothing actually calls g_real_1 in that window (the hooks aren't
+    // enabled, so no detour can fire), but the dangling pointer feels
+    // ugly. The three-pass split keeps Pass 1 a pure "collect resources
+    // into a local array" step and only publishes after we've confirmed
+    // everything created. Cleanup on Pass 1 failure has nothing to
+    // un-publish.
+    //
     // Note on "atomic" enable: MH_EnableHook(MH_ALL_HOOKS) is NOT a
     // database-transaction-style atomic operation. MinHook enables
     // hooks one at a time internally and stops on the first error,
@@ -226,12 +337,6 @@ int install_cpu_hooks(bool clamp_affinity) {
     //     exist; no concurrent caller can observe a partial state.
     //   - On any EnableHook failure we proactively DisableHook all and
     //     RemoveHook all to leave the process in a clean state.
-    //
-    // Why publish trampolines BEFORE EnableHook (not after): if we
-    // published after, there'd be a window between "hook is live" and
-    // "trampoline pointer is set" during which a detour firing would
-    // call through a null g_real_* and crash. Publishing first
-    // eliminates that window.
     struct Created {
         LPVOID      target;
         const char* api_name;
@@ -249,7 +354,12 @@ int install_cpu_hooks(bool clamp_affinity) {
     for (const auto& spec : g_hook_specs) {
         if (spec.always_install) n_required_total++;
 
-        // Opt-out for SetThreadAffinityMask when not requested.
+        // SetThreadAffinityMask is the one OPTIONAL hook. It's not
+        // installed by default because hooking it would log every
+        // affinity-related call in the process (potentially thousands
+        // per second in some games) and clamp affinities — both of
+        // which are intrusive enough that we only do them when the
+        // user explicitly opts in via ClampAffinity=1 in the INI.
         if (!spec.always_install && !clamp_affinity &&
             strcmp(spec.api_name, "SetThreadAffinityMask") == 0) {
             continue;
@@ -258,6 +368,12 @@ int install_cpu_hooks(bool clamp_affinity) {
         LPVOID target = resolve_target(spec.api_name);
         if (!target) {
             if (spec.always_install) {
+                // A required topology API isn't exported by kernel32 on
+                // this Windows. Shouldn't happen on any supported
+                // Windows version (these have all been kernel32 exports
+                // since Windows XP). Refuse to half-install — see the
+                // "all-or-nothing required set" rationale in the file
+                // header.
                 log_line("ERROR: required API %s not exported on this Windows; aborting hook install.",
                          spec.api_name);
                 goto fail;
@@ -270,6 +386,12 @@ int install_cpu_hooks(bool clamp_affinity) {
         MH_STATUS cs = MH_CreateHook(target, spec.detour, &tramp);
         if (cs != MH_OK) {
             if (spec.always_install) {
+                // CreateHook can fail if the target prologue is too
+                // short to relocate (some APIs only have a few bytes
+                // before the first branch), if a hook is already
+                // installed by another tool, or if memory allocation
+                // fails. None of these are recoverable for a required
+                // hook — tear down and bail.
                 log_line("ERROR: MH_CreateHook(%s) failed: %d; aborting.",
                          spec.api_name, (int)cs);
                 goto fail;
@@ -293,6 +415,9 @@ int install_cpu_hooks(bool clamp_affinity) {
     }
 
     // --- Pass 2: publish all trampoline pointers -----------------------
+    // Pure memory writes, can't fail. After this loop, the global
+    // g_real_* function pointers are populated, but the hooks aren't
+    // enabled yet so no detour can actually fire and dereference them.
     for (int i = 0; i < n_created; ++i) {
         *created[i].pp_trampoline = created[i].trampoline;
     }
@@ -304,7 +429,8 @@ int install_cpu_hooks(bool clamp_affinity) {
             log_line("ERROR: MH_EnableHook(MH_ALL_HOOKS) failed: %d; aborting.", (int)es);
             // Best-effort: turn off anything that did get enabled
             // (MinHook may have enabled some before failing on the
-            // current target).
+            // current target). DisableHook is safe to call against
+            // hooks that weren't actually enabled.
             MH_DisableHook(MH_ALL_HOOKS);
             goto fail;
         }

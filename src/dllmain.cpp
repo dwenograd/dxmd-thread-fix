@@ -1,94 +1,169 @@
 // dllmain.cpp - process attach/detach for the dxgi.dll proxy shim.
 //
-// HIGH-LEVEL DESIGN
-// =================
+// Most of the choices in this file look unusual to someone reading the
+// source for the first time. This header explains WHY each unusual
+// thing is the way it is, and what specifically breaks if you change
+// it back to the "normal" version.
 //
-// This DLL is a drop-in proxy for `dxgi.dll` placed next to DXMD.exe.
-// On load (via DXMD's static import of "dxgi.dll"), the OS loader maps
-// us in place of System32's dxgi. We then:
+// ============================================================
+// UNUSUAL THING #1: DLL_PROCESS_ATTACH does a LOT of work
+// ============================================================
 //
-//   1. Forward all 20 dxgi exports to System32's real dxgi.dll via
-//      tail-jump asm stubs (see dxgi_stubs.asm, dxgi_exports.cpp).
+// Standard Windows guidance is "do almost nothing in DllMain". We do
+// the entire fix here: load the real System32 dxgi.dll, install six
+// MinHook detours, etc. This looks alarming. The reason we do it
+// anyway:
 //
-//   2. Install MinHook inline detours on 6 CPU/topology APIs so the
-//      game and its middleware see "8 logical processors" instead of
-//      the host's real (potentially 64+) count. This fixes DXMD's
-//      long-standing high-core-CPU crash.
+// The whole point of this DLL is to lie about CPU count BEFORE the
+// game starts calling GetSystemInfo. At the moment our DllMain runs,
+// the Windows loader has only just begun processing DXMD's static
+// import list. ApexFramework, PhysX*, fmod, bink, amd_ags - and their
+// DllMains - have NOT been loaded yet. Several of those DllMains
+// (verified via dumpbin) call GetSystemInfo themselves. If we punted
+// our hook install to a worker thread, the worker wouldn't get
+// scheduled before those other DllMains ran, they'd get the REAL CPU
+// count, size their thread pools for 64 cores, and the original
+// crash would still happen.
 //
-// PRE-DLLMAIN CALLS
-// =================
+// Doing the install synchronously in DllMain is safe in our specific
+// case because:
+//   (a) MinHook does NOT call LoadLibrary or take the loader lock.
+//       It writes to executable code pages via VirtualProtect on
+//       addresses we resolved via GetProcAddress (whose results are
+//       stable in DllMain).
+//   (b) MinHook's SuspendThread-on-other-threads loop has no other
+//       threads to freeze — we don't create any, and the only thread
+//       at this point in process startup is the loader thread (us).
+//   (c) The recursive LoadLibrary of System32\dxgi.dll is the one
+//       form of recursive load that's actually safe in practice;
+//       system DLLs have trivial DllMains.
 //
-// The Windows loader runs an app-compatibility shim pass (apphelp.dll)
-// on every just-mapped DLL BEFORE running its DllMain. For dxgi, that
-// pass may call `SetAppCompatStringPointer` and a few related compat
-// exports to apply OS compat fixups. Our asm stubs handle this safely
-// because every pfn_FOO slot is initialized at compile time to a trap
-// function (see dtf_traps.cpp + dxgi_exports.cpp). Apphelp calls our
-// stub, the stub jumps to the trap, the trap returns 0 (= "no shim
-// applied"), and apphelp moves on. Then the loader runs our DllMain.
+// Every dxgi-proxy game mod in the wild (Special K, ReShade, ENBSeries,
+// etc.) uses this exact pattern. Decades of production use confirms
+// it works for this specific shape.
 //
-// DLLMAIN SEQUENCE
-// ================
+// ============================================================
+// UNUSUAL THING #2: We do NOT call DisableThreadLibraryCalls
+// ============================================================
 //
-// On DLL_PROCESS_ATTACH we:
-//   1. Initialize the log subsystem in DEFERRED mode (record where the
-//      log file would go, but don't open it yet — so LogLevel=0 leaves
-//      no artifact).
-//   2. Load config from dxmd-thread-fix.ini next to us.
-//   3. If LogLevel > 0, open the log file now and emit startup banner.
-//   4. Check host process is DXMD.exe — if not, we're being loaded into
-//      an unintended host. Log a warning, install the dxgi forwarders
-//      (so we don't break the host), but SKIP the CPU hooks (which are
-//      DXMD-specific and could affect unrelated apps).
-//   5. Load System32\dxgi.dll. If that fails, return FALSE — better to
-//      give the OS a clean "DLL failed to load" than to let the host
-//      get garbage dxgi.dll behaviour.
-//   6. Resolve every export pointer.
-//   7. Compute and store the fake CPU topology.
-//   8. Install CPU/topology hooks via MinHook (all-or-nothing for the
-//      6 required APIs). If install fails, log a loud INACTIVE banner
-//      so the user can see the fix didn't apply.
+// Every proxy-DLL tutorial says to call DisableThreadLibraryCalls in
+// DllMain. We deliberately don't. Reason: combining it with the
+// static CRT (/MT) is a known proxy-DLL hazard — the static CRT
+// relies on per-thread DLL_THREAD_ATTACH / DLL_THREAD_DETACH
+// notifications for some internal state cleanup. ReShade documents
+// the same conclusion in their source.
 //
-// WHY MINHOOK FROM DLLMAIN
-// ========================
+// The cost of NOT calling it: we get DLL_THREAD_ATTACH/_DETACH
+// callbacks (which we ignore — see the `default: return TRUE` arm of
+// DllMain). The cost is negligible. The cost of calling it: subtle
+// CRT state corruption that's basically impossible to debug.
 //
-//   - At the time our DllMain runs, the OS loader has only just begun
-//     processing DXMD.exe's static imports. ApexFramework_x64.dll,
-//     PhysX*, fmod, bink, amd_ags - and their DllMains - have NOT yet
-//     been loaded. Several of those DllMains call GetSystemInfo. If we
-//     deferred hook install to a worker thread, we'd lose every
-//     GetSystemInfo call those DllMains make. The game would crash
-//     during early init exactly as before.
+// ============================================================
+// UNUSUAL THING #3: We check the host process is DXMD.exe
+// ============================================================
 //
-//   - Synchronous MH_Initialize + MH_CreateHook + MH_EnableHook from
-//     DllMain works because:
-//       a) The loader lock is held by the current thread (us).
-//       b) The only "other" thread that could exist is one we created
-//          ourselves; we don't create any. MinHook's SuspendThread loop
-//          finds no other threads to freeze.
-//       c) MinHook does not call LoadLibrary or take the loader lock
-//          itself; it writes to executable code pages we resolve via
-//          GetProcAddress (whose results are stable in DllMain).
+// A proxy DLL that activates in ANY process it's loaded into would
+// modify the CPU-count behavior of arbitrary applications. That's:
+//   (a) Not what users want (they installed this to fix one game).
+//   (b) A LOLBin risk (living-off-the-land binary) — someone could
+//       drop our DLL next to a different EXE to silently alter that
+//       app's thread-pool sizing.
 //
-//   - This is the standard pattern for dxgi.dll proxy mods (Special K,
-//     ReShade, ENBSeries, etc.). Decades of production use across
-//     thousands of games corroborate it for this specific shape.
+// So host_is_dxmd() refuses to install the CPU hooks unless the host
+// EXE is literally named "DXMD.exe". We still forward the dxgi
+// exports correctly (so the unintended host isn't broken), but the
+// thread-count-fix part is gated.
 //
-// We do NOT call DisableThreadLibraryCalls. Using it together with the
-// static CRT (/MT) is a known proxy-DLL hazard — ReShade explicitly
-// avoids the combination because the static CRT relies on per-thread
-// notifications for some internal state.
+// ============================================================
+// UNUSUAL THING #4: We return FALSE on real-dxgi load failure
+// ============================================================
 //
-// DETACH
-// ======
+// If LoadLibraryExW("C:\Windows\System32\dxgi.dll") fails (which
+// should be impossible on a working Windows install, but might
+// happen with aggressive antivirus blocking System32 loads), we
+// return FALSE from DllMain. That makes the loader unmap us and
+// report the host process "failed to load dxgi.dll" — a clean OS
+// error.
 //
-// On DLL_PROCESS_DETACH, behaviour depends on `lpReserved`:
-//   - If lpReserved is NULL: explicit FreeLibrary. Tear down hooks,
-//     free real dxgi, shut down log.
-//   - If lpReserved is non-NULL: process is terminating. Skip cleanup
-//     entirely — Windows is going to reclaim everything anyway, and
-//     non-trivial DllMain work during process exit risks loader-lock
-//     deadlocks (see MSDN: "DllMain entry point").
+// The alternative is returning TRUE with the pfn_FOO traps still in
+// place: the game would call CreateDXGIFactory, our trap would
+// return DXGI_ERROR_NOT_FOUND, and the game would behave however it
+// behaves with no D3D — possibly a confusing crash later. Failing
+// fast at load time is much easier for users to diagnose.
+//
+// ============================================================
+// UNUSUAL THING #5: Detach skips cleanup when lpReserved != nullptr
+// ============================================================
+//
+// Standard Windows etiquette that most code ignores: DLL_PROCESS_DETACH
+// is called in two distinct situations, and the lpReserved parameter
+// tells you which:
+//   - lpReserved == NULL → an EXPLICIT FreeLibrary call. The DLL is
+//     being unloaded but the process keeps running. Clean up resources.
+//   - lpReserved != NULL → the PROCESS IS TERMINATING. Other threads
+//     may be killed mid-execution, the loader is past the point where
+//     calling LoadLibrary / locks is safe, and the OS is going to
+//     reclaim every resource we own anyway.
+//
+// In the second case, doing cleanup (especially MinHook teardown,
+// which manipulates code pages) risks loader-lock deadlocks per the
+// MSDN "DllMain entry point" best-practices document. We skip it.
+// "Leaking" at process exit is correct here — the OS reclaims it all.
+//
+// ============================================================
+// PRE-DLLMAIN APPHELP CRASH (this is the big one)
+// ============================================================
+//
+// The Windows loader runs an application-compatibility shim pass
+// (apphelp.dll) on every just-mapped DLL BEFORE running its
+// DllMain. For dxgi specifically, that pass calls some of dxgi's
+// compat-namespace exports (notably SetAppCompatStringPointer) to
+// apply OS-level compat fixups for the just-loaded DLL.
+//
+// The first version of this DLL initialized every pfn_FOO to nullptr
+// (the normal C++ default) and resolved them in DllMain. That meant
+// our asm stubs did `jmp QWORD PTR [pfn_FOO]` → loaded nullptr →
+// jumped to address 0 → process died at fault offset 0, INSIDE
+// apphelp's call into our SetAppCompatStringPointer, before our
+// DllMain ever ran. Confirmed via minidump analysis.
+//
+// Fix: every pfn_FOO is initialized at COMPILE TIME to point at a
+// no-op trap function (see dtf_traps.cpp + dxgi_exports.cpp). The
+// asm stubs always land on valid code. Apphelp calls our stub, the
+// stub jumps to the trap, the trap returns 0 ("no shim applied;
+// nothing further to do"), and apphelp moves on. Then the loader
+// runs our DllMain, which overwrites the trap pointers with real
+// System32 dxgi addresses.
+//
+// This is the single most important thing about this codebase. If
+// you "fix" the pfn_FOO globals to default to nullptr (or
+// optimize-away the traps as "unused"), the entire DLL stops
+// working in DXMD, and the failure mode (crash before our log file
+// is even created) is hostile to diagnose.
+//
+// ============================================================
+// DLLMAIN SEQUENCE (what attach() actually does, in order)
+// ============================================================
+//
+//   1. log_init_deferred — record the log file path but DON'T open
+//      it yet. Open-on-first-write means a LogLevel=0 user sees no
+//      log artifact appear on disk at all (a trust signal).
+//   2. load_config — read dxmd-thread-fix.ini next to this DLL.
+//   3. log_set_level — apply the parsed LogLevel; opens the log
+//      file if level > 0.
+//   4. host_is_dxmd — refuse to install CPU hooks in non-DXMD
+//      hosts (see UNUSUAL THING #3).
+//   5. load_system_dxgi_and_resolve — load System32 dxgi and
+//      overwrite every pfn_FOO with the real address. Returns FALSE
+//      from DllMain if this fails (see UNUSUAL THING #4).
+//   6. set_topology — capture the REAL CPU count via direct
+//      GetProcAddress (must run BEFORE step 7, because once hooks
+//      are installed, GetProcAddress returns the patched address).
+//   7. install_cpu_hooks — three-pass MinHook install. See
+//      cpu_hooks.cpp for the design.
+//   8. Log FIX STATUS: ACTIVE or INACTIVE so the user can spot it.
+//
+// See src/DESIGN.md for the architectural narrative.
 
 #include "config.h"
 #include "topology.h"
@@ -133,6 +208,14 @@ static BOOL attach() {
              cfg.logical_processors, cfg.clamp_affinity, cfg.log_level);
 
     // Step 3: identify host process.
+    //
+    // Note: this uses a fixed MAX_PATH buffer rather than the
+    // long-path-safe get_module_path() helper because the result is
+    // purely for human-readable logging — truncation here is a
+    // log-quality issue, not a correctness one. The actual DXMD
+    // identity check (host_is_dxmd) above DOES use the long-path-safe
+    // helper because that decision gates whether the fix installs at
+    // all.
     wchar_t host_path[MAX_PATH];
     DWORD host_n = GetModuleFileNameW(nullptr, host_path, MAX_PATH);
     if (host_n > 0 && host_n < MAX_PATH) {

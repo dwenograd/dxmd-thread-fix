@@ -118,13 +118,65 @@ $commonFlags = @(
 $cppFlags = @('/W4', '/EHsc', '/std:c++17') + $commonFlags
 $cFlags   = @('/W3')                          + $commonFlags
 if ($Config -eq 'Release') {
-    # Hardening: /GS (stack cookies on), /sdl (additional checks), explicit
-    # security mitigations. NOT /guard:cf because MinHook's runtime code
-    # patching is fundamentally at odds with CFG validation. (Some CFG-
-    # related load-config metadata may still appear in the final binary
-    # due to MSVC's static CRT objects being CFG-instrumented upstream;
-    # that metadata is inert because the IMAGE_DLLCHARACTERISTICS_GUARD_CF
-    # bit is not set, so the OS loader doesn't enforce CFG on us.)
+    # =================================================================
+    # Why these specific compiler flags (matters for anyone reviewing
+    # this source — these are deliberate, not accidental):
+    # =================================================================
+    #
+    # /O2 /Oi /GL  — standard release optimization. /GL enables whole-
+    #                program optimization (LTCG). The traps in
+    #                dtf_traps.cpp use __declspec(noinline) to survive
+    #                this (we need their symbols intact for the pfn_FOO
+    #                initializers).
+    #
+    # /MT          — static CRT linkage. CRITICAL design choice.
+    #                The alternative /MD links against the user's
+    #                installed VC++ redistributable. Most users don't
+    #                have the exact redist version we'd target — and
+    #                the failure mode is "DLL fails to load with
+    #                obscure 'msvcp140.dll not found' error" which
+    #                would defeat the entire 'drop in and play' value
+    #                proposition of this fix. Static CRT makes our
+    #                ~150 KB dxgi.dll completely self-contained.
+    #
+    #                Cost: ~80 KB of CRT statically baked in. Fine.
+    #
+    # /DNDEBUG     — strips asserts.
+    #
+    # /GS          — stack-cookie checks. Inserts canary values to
+    #                detect stack-buffer overflow. Cheap and good.
+    #
+    # /sdl         — Security Development Lifecycle extra checks.
+    #                Turns specific warnings into errors and enables
+    #                additional buffer-security checks.
+    #
+    # /Gy          — function-level linking; lets the linker /OPT:REF
+    #                drop unused functions (cleaner final binary).
+    #
+    # ------ Flags we deliberately DO NOT use ------
+    #
+    # /guard:cf    — Control Flow Guard. Validates indirect call
+    #                targets against a compile-time-known set. This
+    #                is fundamentally incompatible with MinHook,
+    #                which patches function prologues at runtime to
+    #                redirect calls — those targets aren't in the
+    #                CFG metadata, so CFG would refuse to call them.
+    #                Without MinHook, no hooks, no fix.
+    #
+    #                NOTE: Some CFG-related load-config metadata may
+    #                still appear in the final binary because MSVC's
+    #                static CRT objects are CFG-instrumented upstream.
+    #                That metadata is inert — the OS only enforces
+    #                CFG when IMAGE_DLLCHARACTERISTICS_GUARD_CF is
+    #                set in the PE header, which we don't set. A
+    #                code-curious reader running `dumpbin /loadconfig`
+    #                will see the CFG fields populated and might
+    #                think we're enabling it; we're not.
+    #
+    # /MD          — see /MT above. Would force a VC++ redist dep.
+    #
+    # /Wall        — too noisy; includes warnings for system headers.
+    #                We use /W4 instead (still strict, signal-only).
     $relFlags = @('/O2', '/Oi', '/GL', '/MT', '/DNDEBUG', '/GS', '/sdl', '/Gy')
     $cppFlags += $relFlags
     $cFlags   += $relFlags
@@ -197,18 +249,43 @@ $linkFlags = @(
     '/DLL',
     '/MACHINE:X64',
     '/SUBSYSTEM:WINDOWS',
-    # Security mitigations (explicit, so PE characteristics reflect them):
-    '/DYNAMICBASE',          # ASLR
-    '/HIGHENTROPYVA',        # 64-bit ASLR
-    '/NXCOMPAT',             # DEP
+    # =================================================================
+    # PE security characteristics. We set these explicitly so the
+    # final binary's IMAGE_DLLCHARACTERISTICS field reflects them and
+    # the OS loader enforces them. (Defaults vary by toolchain; being
+    # explicit makes the security posture self-documenting.)
+    # =================================================================
+    '/DYNAMICBASE',          # ASLR — DLL is randomly relocated at load
+    '/HIGHENTROPYVA',        # 64-bit ASLR (full address-space entropy)
+    '/NXCOMPAT',             # DEP — non-executable data pages
+    # /DEF specifies the module-definition file that lists our 20 dxgi
+    # exports by exact name AND ordinal. We use a .def file (not
+    # __declspec(dllexport)) because:
+    #   1. The dxgi exports include reserved names like CreateDXGIFactory
+    #      that we want exported without C++ name mangling, AND
+    #   2. Several dxgi exports are by ordinal only on some Windows
+    #      versions, and .def lets us pin both name AND ordinal to
+    #      match System32 dxgi exactly. This matters because some
+    #      callers (notably amd_ags) GetProcAddress by ordinal.
     "/DEF:$defFile",
     "/OUT:$outDll",
     "/IMPLIB:$implib",
     "/PDB:$outPdb",
-    # Minimal system import:
+    # Only system import is kernel32 (for LoadLibrary, GetProcAddress,
+    # CreateFile, the topology APIs, etc.). MinHook is statically
+    # linked from the vendored source. Keeping the import list minimal
+    # means a security auditor running `dumpbin /imports dxgi.dll` sees
+    # a one-line answer: "yep, just kernel32, nothing fishy".
     'kernel32.lib'
 )
 if ($Config -eq 'Release') {
+    # /LTCG: pairs with /GL on the compile side for whole-program opt.
+    # /OPT:REF: drop unused functions/data.
+    # /OPT:ICF: fold identical-COMDAT functions to one address.
+    #          (See dtf_traps.cpp note — this can fold two trap
+    #          functions with identical machine code to one address,
+    #          which is safe but worth knowing when debugging.)
+    # /RELEASE: sets the PE characteristics IMAGE_FILE_RELEASE bit.
     $linkFlags += @('/LTCG', '/OPT:REF', '/OPT:ICF', '/RELEASE')
 } else {
     $linkFlags += @('/DEBUG')

@@ -1,3 +1,26 @@
+// config.cpp - INI file loader for dxmd-thread-fix.ini.
+//
+// Reads the INI file from the same folder as this DLL (resolved via
+// path_util's long-path-safe helper). All values are integers, read
+// via GetPrivateProfileIntW (which lives in kernel32 — no extra
+// dependency, no need to write our own INI parser).
+//
+// Defaults (defined in config.h) take effect if the file is missing,
+// the [ThreadFix] section is missing, or a specific key is missing.
+// That's intentional: a user who deletes the INI gets correct default
+// behavior, not a crash.
+//
+// All values are bounded with a sanity clamp before returning. The
+// LogicalProcessors upper clamp matches the eventual topology-level
+// clamp (64 logical processors = the single-processor-group ceiling),
+// so the "config: LogicalProcessors=X" log line agrees with the
+// effective topology cap and users aren't confused by a config value
+// that's silently reduced later.
+//
+// On extremely long install paths (more than MAX_PATH wchars), the
+// underlying get_module_dir() / HeapAlloc may fail; in that case we
+// return the defaults rather than crashing.
+
 #include "config.h"
 #include "path_util.h"
 
