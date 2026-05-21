@@ -701,6 +701,15 @@ The Release build uses:
 - `/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT` — explicit security mitigations.
 - **No `/guard:cf`** — Control Flow Guard is incompatible with MinHook's
   runtime code patching (CFG would reject the patched function pointers).
+  Note: `dumpbin /loadconfig dist\dxgi.dll` shows some CFG-related load
+  config metadata (e.g. `Guard CF address of check-function pointer`,
+  `Guard Flags: CF instrumented`). That metadata comes from the static
+  CRT (MSVC ships its CRT objects with CFG instrumentation) and is NOT
+  actively enforced — the DLL Characteristics field does NOT set the
+  `IMAGE_DLLCHARACTERISTICS_GUARD_CF` bit, so the OS loader doesn't
+  treat the image as CFG-enabled. Confirm via `dumpbin /headers
+  dist\dxgi.dll` → the "DLL characteristics" line will not include
+  "Guard CF".
 
 ### Install (for testing)
 

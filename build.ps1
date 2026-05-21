@@ -120,7 +120,11 @@ $cFlags   = @('/W3')                          + $commonFlags
 if ($Config -eq 'Release') {
     # Hardening: /GS (stack cookies on), /sdl (additional checks), explicit
     # security mitigations. NOT /guard:cf because MinHook's runtime code
-    # patching is fundamentally at odds with CFG validation.
+    # patching is fundamentally at odds with CFG validation. (Some CFG-
+    # related load-config metadata may still appear in the final binary
+    # due to MSVC's static CRT objects being CFG-instrumented upstream;
+    # that metadata is inert because the IMAGE_DLLCHARACTERISTICS_GUARD_CF
+    # bit is not set, so the OS loader doesn't enforce CFG on us.)
     $relFlags = @('/O2', '/Oi', '/GL', '/MT', '/DNDEBUG', '/GS', '/sdl', '/Gy')
     $cppFlags += $relFlags
     $cFlags   += $relFlags
