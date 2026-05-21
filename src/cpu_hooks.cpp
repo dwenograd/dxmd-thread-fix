@@ -201,15 +201,20 @@ static DWORD_PTR WINAPI Hooked_SetThreadAffinityMask(HANDLE hThread, DWORD_PTR m
     // on CPU indices it expects to see active.
     //
     // FIX (when ClampAffinity=1):
-    //   - Build `allowed` = the bitmask of the first N bits (CPUs in
-    //     the thread's current processor group that fit our fake
-    //     topology). NOTE: this is NOT a cross-group migration
-    //     mechanism — we don't call SetThreadGroupAffinity to move
-    //     the thread to group 0. We only clamp the mask within
-    //     whatever group the thread is in. In practice, DXMD's
-    //     threads are placed in group 0 by default (DXMD predates
-    //     processor-group-aware thread placement), so this is the
-    //     same as "clamp to the first N global CPUs" for our case.
+    //   - Build `allowed` = the bitmask of the first N bits in the
+    //     thread's current processor group. NOTE: this is NOT a
+    //     cross-group migration mechanism — we don't call
+    //     SetThreadGroupAffinity to move the thread to group 0. We
+    //     only clamp the mask within whatever group the thread is
+    //     in. On a single-group system (≤64 LPs, or systems where
+    //     all threads happen to land in one group) this matches
+    //     "first N global CPUs". On a multi-group system, our clamp
+    //     is a best-effort consistency measure within the local
+    //     group, not a cross-group guarantee. We've validated this
+    //     pattern works for DXMD on Threadripper (single group of
+    //     real CPUs for our test machine); multi-group target
+    //     systems (>64 LPs split across groups) haven't been
+    //     extensively tested.
     //   - Compute `intersected` = requested-mask AND allowed.
     //   - If the requested mask had any overlap with allowed, use the
     //     intersection (honors caller intent within our fake set).
@@ -315,10 +320,12 @@ int install_cpu_hooks(bool clamp_affinity) {
     // statically-linked MinHook copy has its own separate globals
     // and can't possibly initialize ours. The MH_ERROR_ALREADY_INITIALIZED
     // path here is effectively defensive against our own DllMain
-    // running twice (which it shouldn't — Windows calls DLL_PROCESS_ATTACH
-    // exactly once per LoadLibrary — but if some future change ever
-    // routed install_cpu_hooks() through a code path that could
-    // re-enter, the bookkeeping below prevents us from tearing down
+    // running twice (which it shouldn't — Windows calls
+    // DLL_PROCESS_ATTACH once per process load of this DLL, not
+    // once per LoadLibrary refcount bump — but if some future
+    // change ever routed install_cpu_hooks() through a code path
+    // that could re-enter, the bookkeeping below prevents us from
+    // tearing down
     // a still-in-use MinHook state on the second exit).
     bool we_initialized_mh = false;
     MH_STATUS s = MH_Initialize();

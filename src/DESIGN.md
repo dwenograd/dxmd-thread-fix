@@ -51,10 +51,14 @@ adding *new* bugs.
 ### Why a `dxgi.dll` proxy
 
 DXMD statically imports `dxgi.dll`. The Windows loader resolves that
-import using the standard DLL search order, which searches the EXE's
-own directory before `System32`. So if we drop our `dxgi.dll` into
-the same `retail/` folder as `DXMD.exe`, the loader picks ours up
-first.
+import using the standard DLL search order, which for non-KnownDLLs
+searches the EXE's own directory before `System32`. (KnownDLLs —
+the small set of pre-mapped core OS DLLs listed in
+`HKLM\SYSTEM\...\Session Manager\KnownDLLs` — bypass this search and
+load from `\KnownDlls\`. `dxgi.dll` is not in the KnownDLLs list on
+any version of Windows we support, so the standard search applies.)
+So if we drop our `dxgi.dll` into the same `retail/` folder as
+`DXMD.exe`, the loader picks ours up first.
 
 This means our DLL runs **earlier than any DXMD code** — early enough
 that our hooks are in place before `GetSystemInfo` is ever called.
@@ -357,8 +361,13 @@ VERSIONINFO is embedded (`src/version.rc`) so:
 - Users can verify identity via right-click → Properties → Details
   → "ProductName" should be `dxmd-thread-fix`.
 - The install/uninstall scripts use the VERSIONINFO ProductName
-  field as the "is this our DLL" identity check (so upgrades
-  between dtf versions don't trigger the foreign-mod-detected path).
+  field as a convenience identity check (so upgrades between dtf
+  versions don't trigger the foreign-mod-detected path). NOTE: this
+  is NOT a cryptographic authenticity check — any DLL can claim
+  `ProductName=dxmd-thread-fix`. The scripts use it to avoid
+  accidentally overwriting a foreign mod's DLL, not to prove the
+  installed DLL is genuinely ours. Use the SHA-256 hashes from the
+  GitHub release manifest for that.
 
 ---
 
@@ -385,12 +394,15 @@ allows) vs. what the source actually shows it doing:
 - It does NOT import `ws2_32`, `wininet`, `winhttp` (no socket /
   HTTP capability — would need a runtime LoadLibrary to get it, and
   the source contains no such call).
-- It does NOT import `advapi32` (no registry capability at all).
-- It does NOT import any of `kernel32!CreateProcess*`,
-  `shell32!ShellExecute*` (no process-creation capability — same
-  caveat: it COULD via dynamic load, but the source shows it
-  doesn't).
-- The COMPLETE list of files it touches at runtime is:
+- It does NOT statically import `advapi32` and the source contains
+  no dynamic LoadLibrary of it (grep for `advapi32` in the source).
+  No registry capability via that route.
+- It does NOT statically import `kernel32!CreateProcess*`,
+  `shell32!ShellExecute*`, and the source contains no dynamic
+  LoadLibrary that would resolve them. No process-creation
+  capability via that route.
+- Project-controlled files this source explicitly opens, writes,
+  or loads at runtime:
     * READ:  `dxmd-thread-fix.ini` next to the DLL (via
       `GetPrivateProfileIntW` — values are integers clamped to small
       ranges, no string injection surface).
@@ -399,6 +411,9 @@ allows) vs. what the source actually shows it doing:
       `log.cpp::log_line`).
     * LOAD:  `C:\Windows\System32\dxgi.dll` (absolute path built
       from `GetSystemDirectoryW`).
+  (Loading System32\dxgi.dll causes the OS loader to transitively
+  map dxgi's own dependencies — d3d11.dll, etc. — which is normal
+  OS behavior outside this DLL's direct control.)
   Verify with `dumpbin /imports dxgi.dll` — kernel32 is the only
   library imported, so any other file access would require a
   dynamic LoadLibrary that the source doesn't make.

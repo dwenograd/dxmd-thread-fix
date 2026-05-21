@@ -1,8 +1,17 @@
 ; dxgi.def - exact name + ordinal preservation for our proxy dxgi.dll.
 ;
-; Ordinals here MUST match the System32 dxgi.dll on Windows 10+. They
-; were captured via `dumpbin /exports C:\Windows\System32\dxgi.dll`
-; and verified to match across our test installs.
+; Ordinals here were captured from `dumpbin /exports
+; C:\Windows\System32\dxgi.dll` on Windows 10/11 and verified to
+; match across the test installs we use for in-game testing. On
+; older Windows (Win7 SP1 / Win 8.1) some of these exports may be
+; missing from the host's System32 dxgi entirely; for those slots,
+; the per-export pfn_FOO stays pointing at its compile-time trap
+; (see src/dtf_traps.cpp). That degrades a missing-export call to
+; a typed failure return rather than a crash. We do NOT export
+; functions that DXMD doesn't need — see the DXMD dumpbin /imports
+; for the actual usage set; the 20 exports below were chosen to
+; cover that set plus a margin for middleware that GetProcAddress's
+; them.
 ;
 ; Why preserve ordinals (and not just names)?
 ;   - Most callers (DXMD included) resolve dxgi exports by NAME via

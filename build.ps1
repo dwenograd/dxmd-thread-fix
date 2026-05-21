@@ -14,10 +14,11 @@
 #   - Debug builds also emit dist\dxgi.pdb; Release builds do not
 #     (we don't pass /DEBUG to the linker in Release mode).
 #   - Self-builds are NOT expected to match the SHA-256 of official
-#     release binaries byte-for-byte; MSVC embeds timestamps, GUIDs,
-#     and absolute paths that differ between machines. Verify the
-#     EXPORT TABLE matches the official release (dumpbin /exports),
-#     and that the source you built came from a tagged commit.
+#     release binaries byte-for-byte; MSVC embeds timestamps and
+#     other linker/toolchain metadata into the PE that differ between
+#     machines and toolchain versions. Verify the EXPORT TABLE
+#     matches the official release (dumpbin /exports), and that the
+#     source you built came from a tagged commit.
 
 param(
     [ValidateSet('Release', 'Debug')]
@@ -287,10 +288,11 @@ $linkFlags = @(
     # __declspec(dllexport)) because:
     #   1. The dxgi exports include reserved names like CreateDXGIFactory
     #      that we want exported without C++ name mangling, AND
-    #   2. Several dxgi exports are by ordinal only on some Windows
-    #      versions, and .def lets us pin both name AND ordinal to
-    #      match System32 dxgi exactly. This matters because some
-    #      callers (notably amd_ags) GetProcAddress by ordinal.
+    #   2. Some callers (notably amd_ags and older D3D10-era code
+    #      paths) resolve dxgi exports by ordinal in addition to or
+    #      instead of by name. The .def file lets us pin both the
+    #      name AND the ordinal to match System32 dxgi exactly, so
+    #      ordinal-based resolution keeps working through our proxy.
     "/DEF:$defFile",
     "/OUT:$outDll",
     "/IMPLIB:$implib",

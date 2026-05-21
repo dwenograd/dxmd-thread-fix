@@ -150,10 +150,10 @@ powershell.exe -ExecutionPolicy Bypass -File build.ps1
 ```
 
 The output is `dist\dxgi.dll`. The script prints the SHA-256 at the
-end. **Caveat:** MSVC embeds timestamps, GUIDs, and absolute paths
-into the PE, so two builds on two machines won't be byte-identical
-even from the same source — that's a known MSVC quirk, not a Trojan
-indicator. What you *can* verify identically is:
+end. **Caveat:** MSVC embeds timestamps and other linker/toolchain
+metadata into the PE, so two builds on two machines won't be
+byte-identical even from the same source — that's a known MSVC
+quirk, not a Trojan indicator. What you *can* verify identically is:
 
 - The exports table (`dumpbin /exports dxgi.dll`) — exactly 20 exports, exact ordinals matching System32 dxgi.
 - The import table (`dumpbin /imports dxgi.dll`) — only kernel32.
@@ -618,13 +618,14 @@ topology.
 
 ### The subtle bit
 
-The Windows loader's app-compatibility shim layer (`apphelp.dll`)
-runs a compat-fixup pass on DLLs in the process **before** running
-each DLL's entry point. For executables flagged for compat fixups
-(DXMD is, like most pre-Win10 AAA games), and for dxgi specifically,
-that pass calls some of dxgi's compat exports (notably
-`SetAppCompatStringPointer`) to apply
-OS-level fixups.
+In the DXMD startup path we observed (debugger and minidump analysis
+on real crash dumps), apphelp.dll's `SE_DllLoaded` code path calls
+some of dxgi's compat-namespace exports (notably
+`SetAppCompatStringPointer`) BEFORE running our DLL's entry point.
+This appears tied to DXMD's compat-flagged state and dxgi's
+specifically-shimmable compat namespace; we don't claim this for
+every DLL/process/Windows version, only that it reliably happens
+in our target.
 
 If our dxgi export stubs jumped through null pointers at that point,
 the process would crash inside `apphelp.dll` before our DllMain ever
@@ -687,8 +688,8 @@ for debugging, edit `build.ps1` to add `/Zi` to the cl flags and
 
 The script prints the SHA-256 of the built DLL at the end. Self-builds
 are NOT expected to match the SHA-256 of official releases byte-for-byte —
-MSVC embeds timestamps, GUIDs, and absolute paths into PE files that
-differ between machines. What you CAN verify identically is:
+MSVC embeds timestamps and other linker/toolchain metadata into PE files
+that differ between machines. What you CAN verify identically is:
 
 - The export table (`dumpbin /exports dist\dxgi.dll`) — exactly 20
   names + ordinals matching `C:\Windows\System32\dxgi.dll`.
