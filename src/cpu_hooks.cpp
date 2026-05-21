@@ -214,10 +214,16 @@ static DWORD_PTR WINAPI Hooked_SetThreadAffinityMask(HANDLE hThread, DWORD_PTR m
     //
     // WHY OPT-IN BY DEFAULT: in practice, all our in-game testing on
     // a 32C/64T Threadripper showed DXMD never asks for an affinity
-    // mask outside our fake range — the other 6 hooks suffice. Logging-
-    // only mode (ClampAffinity=0) lets users with weird setups discover
-    // whether they need to flip it on, without changing behavior for
-    // the 99% case.
+    // mask outside our fake range — the other 6 hooks suffice. With
+    // ClampAffinity=0 (the default), we do NOT install this hook at
+    // all (see install_cpu_hooks() below — the SetThreadAffinityMask
+    // entry has always_install=false and the install loop skips it
+    // when clamp_affinity is false). The DLL doesn't observe, log, or
+    // alter affinity calls in the default configuration. Users on
+    // weird CPU topologies who hit affinity-related crashes can flip
+    // to ClampAffinity=1 (which installs the hook and applies the
+    // clamping logic above); LogLevel=2 will then show every
+    // affinity call for diagnostics.
     const auto& topo = topology();
     const DWORD_PTR allowed = first_n_bits_mask(topo.logical_processors);
     DWORD_PTR effective = mask;
@@ -355,11 +361,15 @@ int install_cpu_hooks(bool clamp_affinity) {
         if (spec.always_install) n_required_total++;
 
         // SetThreadAffinityMask is the one OPTIONAL hook. It's not
-        // installed by default because hooking it would log every
-        // affinity-related call in the process (potentially thousands
-        // per second in some games) and clamp affinities — both of
-        // which are intrusive enough that we only do them when the
-        // user explicitly opts in via ClampAffinity=1 in the INI.
+        // installed by default because (1) at LogLevel=2 it would log
+        // every affinity-related call in the process (potentially
+        // thousands per second in some middleware) and (2) when
+        // installed it actively clamps affinities to fit our fake
+        // topology — that's a behavior change, not just observation.
+        // We only do either of those when the user explicitly opts in
+        // via ClampAffinity=1 in the INI. With ClampAffinity=0 the
+        // DLL doesn't observe or alter affinity calls at all (the
+        // hook isn't installed, so no detour code runs for them).
         if (!spec.always_install && !clamp_affinity &&
             strcmp(spec.api_name, "SetThreadAffinityMask") == 0) {
             continue;

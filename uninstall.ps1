@@ -183,18 +183,20 @@ if ($unparseableBackups.Count -gt 0) {
 
 # 4. Execute. Order:
 #    - If there's a backup to restore: overwrite the active dxgi.dll
-#      with the oldest backup (this is the "restore"; on NTFS the
-#      overwrite is atomic, so we can't end up with no DLL even if
-#      the operation is interrupted). Then delete every backup file.
-#    - If there's no backup: delete the active DLL only if we agreed
-#      to above (dllAction == delete-ours or delete-foreign-forced).
+#      with the oldest backup using Copy-Item -Force, then delete
+#      every backup file. We deliberately do NOT do "delete the
+#      active DLL, then copy the backup in its place" because that
+#      sequence has an intermediate state where no dxgi.dll exists
+#      in retail/. If the script crashed there, the user would have
+#      no DLL at all. The Copy-Item -Force keeps a file at $dll for
+#      the entire operation. (Copy-Item is NOT a transactional
+#      atomic-replace primitive — an interrupted copy can still
+#      leave a partially-written file at $dll — but it's strictly
+#      better than the delete-then-copy alternative.)
+#    - If there's no backup: delete the active DLL only if we
+#      agreed to above (dllAction == delete-ours or
+#      delete-foreign-forced).
 #    - Then delete the INI and the log file regardless.
-#
-#    There is no separate "delete the active DLL THEN restore"
-#    sequence — Copy-Item -Force IS the restore, and it leaves a
-#    file at $dll for the entire operation. Doing it in two steps
-#    (delete, then copy) would create a brief window where the user
-#    has no dxgi.dll, which matters if the script crashes mid-way.
 
 if ($restoreFrom) {
     # Copy the oldest backup over the active DLL. -Force ensures we

@@ -388,9 +388,13 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
   specifically troubleshooting affinity-related crashes. When set to
   `1`, we additionally install a hook on `SetThreadAffinityMask` and
   clamp any requested affinity mask into the first
-  `LogicalProcessors` bits, logging any clamping that happens. The
-  default `0` value does NOT install this hook at all, so the log
-  won't contain `SetThreadAffinityMask` lines unless you enable it.
+  `LogicalProcessors` bits. The default `0` value does NOT install
+  this hook at all — the DLL doesn't observe or alter
+  `SetThreadAffinityMask` calls in the default configuration, and
+  the log won't contain `SetThreadAffinityMask` lines unless you
+  enable this option. With `ClampAffinity=1`, the log shows the
+  first affinity call at `LogLevel=1` (with a `[clamped]` tag if a
+  clamp happened) and every affinity call at `LogLevel=2`.
 
 - **LogLevel** — `0` disables logging entirely: no log file is created
   or updated for the run. An *old* log file from a previous run is
