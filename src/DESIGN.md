@@ -104,19 +104,24 @@ The very first attempt at this fix initialized every `pfn_FOO` to
 `nullptr` and resolved them in DllMain. **That crashed every install
 during process startup**, before our DllMain ever ran.
 
-Root cause: the Windows loader runs an application-compatibility
-shim pass (`apphelp.dll`) on DLLs in the process **before** running
-each DLL's entry point. For executables flagged for compat fixups
-(DXMD is) and for dxgi specifically, that pass calls some of
-dxgi's compat-namespace exports (notably `SetAppCompatStringPointer`)
-to apply OS-level fixups. Our asm stub did `jmp [NULL]` and the
-process died at fault address 0.
+Root cause: in the DXMD startup path we observed (debugger and
+minidump analysis on real crash dumps), the Windows app-compat
+shim engine (`apphelp.dll`'s `SE_DllLoaded` code path) runs on
+DLLs in the process and calls some of dxgi's compat-namespace
+exports (notably `SetAppCompatStringPointer`) BEFORE our DllMain
+entry point. This appears to be tied to DXMD's compat-flagged
+state and to dxgi's specifically-shimmable compat namespace; we
+don't claim this is a general "for every DLL on every Windows"
+invariant, only that it reliably happens for our target process.
+Our asm stub did `jmp [NULL]` and the process died at fault
+address 0.
 
 Fix: every `pfn_FOO` is initialized at **compile time** to point at
 a no-op trap function (see `src/dtf_traps.cpp`). The asm stubs always
 land on valid code, even before our DllMain runs. Apphelp asks "did
-you handle this compat string?", the trap returns 0 ("no shim
-applied; nothing further to do"), and the loader proceeds to run
+you handle this compat string?", the trap returns 0 (which the
+apphelp code path observed during DXMD startup accepts as a
+successful no-op shim result), and the loader proceeds to run
 our DllMain, which overwrites the trap pointers with real addresses.
 
 ### Five trap categories

@@ -186,20 +186,30 @@ static DWORD_PTR WINAPI Hooked_SetThreadAffinityMask(HANDLE hThread, DWORD_PTR m
     // (ClampAffinity=0 in dxmd-thread-fix.ini by default):
     //
     // PROBLEM: We tell DXMD (via the other 6 hooks) that the system
-    // has only N logical processors (default 8). But the OS still
-    // really has 64+ CPUs. When DXMD or its middleware calls
-    // SetThreadAffinityMask with a bitmask, the bitmask is in REAL-
-    // CPU-numbering. If middleware asked for CPU 50 (because at some
-    // earlier point it saw 64 real CPUs through a path we didn't
-    // hook), the OS would happily pin the thread to CPU 50 — but our
-    // lie said CPUs only go up to 8. The thread runs anyway, but we
-    // have an inconsistency, and in pathological cases the middleware
-    // might decide nothing is running because it's polling on CPU
-    // indices it expects to see active.
+    // has only N logical processors (default 8) in a single processor
+    // group. But the OS still really has 64+ CPUs and may have
+    // multiple processor groups. When DXMD or its middleware calls
+    // SetThreadAffinityMask with a bitmask, that mask applies within
+    // the thread's CURRENT processor group — bit 0 is CPU 0 of that
+    // group, NOT global CPU 0. If the middleware asked for a high-
+    // numbered bit in the mask (because at some earlier point it saw
+    // 64 real CPUs in its group through a path we didn't hook), the
+    // OS would happily pin the thread to that CPU within its group —
+    // but our lie said CPUs only go up to 8. The thread runs anyway,
+    // but we have an inconsistency, and in pathological cases the
+    // middleware might decide nothing is running because it's polling
+    // on CPU indices it expects to see active.
     //
     // FIX (when ClampAffinity=1):
-    //   - Build `allowed` = the bitmask of the first N real CPUs
-    //     (the ones in our "fake" topology).
+    //   - Build `allowed` = the bitmask of the first N bits (CPUs in
+    //     the thread's current processor group that fit our fake
+    //     topology). NOTE: this is NOT a cross-group migration
+    //     mechanism — we don't call SetThreadGroupAffinity to move
+    //     the thread to group 0. We only clamp the mask within
+    //     whatever group the thread is in. In practice, DXMD's
+    //     threads are placed in group 0 by default (DXMD predates
+    //     processor-group-aware thread placement), so this is the
+    //     same as "clamp to the first N global CPUs" for our case.
     //   - Compute `intersected` = requested-mask AND allowed.
     //   - If the requested mask had any overlap with allowed, use the
     //     intersection (honors caller intent within our fake set).

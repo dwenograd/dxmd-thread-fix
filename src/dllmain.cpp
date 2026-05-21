@@ -15,23 +15,31 @@
 // anyway:
 //
 // The whole point of this DLL is to lie about CPU count BEFORE the
-// game starts calling GetSystemInfo. At the moment our DllMain runs,
-// the Windows loader is still processing DXMD's static import graph —
-// most of DXMD's middleware modules (ApexFramework, PhysX*, fmod,
-// bink, amd_ags) have not yet had their own initialization code run.
-// Several of those modules import GetSystemInfo and other topology
-// APIs (verifiable via dumpbin /imports); if any of them happens to
-// call those APIs early in its own initialization, it would see the
-// real CPU count before we'd had a chance to hook anything. If we
-// punted our hook install to a worker thread, the worker wouldn't
-// get scheduled before those middleware modules ran their init code,
-// and the original crash would still happen.
+// game starts calling GetSystemInfo. The strict guarantee a dxgi-
+// proxy gives is: our DllMain runs before DXMD.exe's entry point
+// (DXMD statically imports dxgi.dll, so the loader maps and
+// initializes us as part of resolving DXMD's import table, before
+// transferring control to DXMD's `main`). Whether our DllMain runs
+// before each SIBLING DLL's DllMain depends on the loader's
+// topological walk of the import graph.
+//
+// In DXMD's actual import order (verified by in-game testing across
+// many sessions), our DllMain runs before most of DXMD's middleware
+// modules — ApexFramework, PhysX*, fmod, bink, amd_ags — have done
+// their initialization work. Several of those modules import
+// GetSystemInfo and other topology APIs (visible in dumpbin
+// /imports); if any of them calls those APIs early in its own init,
+// it would see the real CPU count before we'd had a chance to hook
+// anything. If we punted our hook install to a worker thread, the
+// worker wouldn't be scheduled before those modules ran their init
+// code, and the original crash would still happen.
 //
 // (Whether a given middleware actually calls these APIs from its
 // DllMain vs. somewhere later in its init is module-specific and not
 // something dumpbin alone can prove — but the safe assumption is "as
 // early as the loader's first chance to run their code." Installing
-// hooks synchronously in our DllMain puts us before all of that.)
+// hooks synchronously in our DllMain puts us as early as possible
+// for the DXMD import order.)
 //
 // Doing the install synchronously in DllMain is safe in our specific
 // case because:
@@ -139,11 +147,17 @@
 // PRE-DLLMAIN APPHELP CRASH (this is the big one)
 // ============================================================
 //
-// The Windows loader runs an application-compatibility shim pass
-// (apphelp.dll) on every just-mapped DLL BEFORE running its
-// DllMain. For dxgi specifically, that pass calls some of dxgi's
-// compat-namespace exports (notably SetAppCompatStringPointer) to
-// apply OS-level compat fixups for the just-loaded DLL.
+// In the DXMD startup path we have observed (via debugger and
+// minidump analysis on real crash dumps), the Windows app-compat
+// shim engine — apphelp.dll's SE_DllLoaded code path — calls some
+// of dxgi's compat-namespace exports (notably SetAppCompatStringPointer)
+// to apply OS-level compat fixups for the just-loaded DLL BEFORE
+// our DllMain entry point runs. This appears to be tied to DXMD's
+// compat-flagged state (typical for pre-Win10 AAA games) and to
+// dxgi's specifically-shimmable compat namespace; we do NOT rely
+// on this as a general "for every DLL on every Windows" invariant,
+// only on the empirical fact that it happens for our target
+// process.
 //
 // The first version of this DLL initialized every pfn_FOO to nullptr
 // (the normal C++ default) and resolved them in DllMain. That meant
@@ -155,10 +169,11 @@
 // Fix: every pfn_FOO is initialized at COMPILE TIME to point at a
 // no-op trap function (see dtf_traps.cpp + dxgi_exports.cpp). The
 // asm stubs always land on valid code. Apphelp calls our stub, the
-// stub jumps to the trap, the trap returns 0 ("no shim applied;
-// nothing further to do"), and apphelp moves on. Then the loader
-// runs our DllMain, which overwrites the trap pointers with real
-// System32 dxgi addresses.
+// stub jumps to the trap, the trap returns 0 (which apphelp's
+// observed code path accepts as a successful no-op shim-application
+// result), and apphelp moves on. Then the loader runs our DllMain,
+// which overwrites the trap pointers with real System32 dxgi
+// addresses.
 //
 // This is the single most important thing about this codebase. If
 // you "fix" the pfn_FOO globals to default to nullptr (or

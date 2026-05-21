@@ -632,7 +632,8 @@ got a chance to run. We've solved this by initializing every stub's
 target pointer at compile time to a no-op trap function defined in
 `src/dtf_traps.cpp` — so the stubs always land on valid code. Apphelp
 asks "did you handle this compat string?", our trap returns 0
-("no shim applied; nothing further to do"), and the loader proceeds
+(which the apphelp code path observed during DXMD startup accepts as
+a successful no-op shim result), and the loader proceeds
 to run our DllMain, which overwrites the trap pointers with the real
 System32 dxgi addresses.
 

@@ -99,8 +99,12 @@ extern "C" HRESULT WINAPI dtf_trap_HRESULT_HANDLE(HANDLE);
 //
 // Why different traps for different exports? Because returning 0 means
 // different things to different APIs. For SetAppCompatStringPointer
-// (called by apphelp), 0 means "no shim applied, continue" — safe.
-// For CreateDXGIFactory, returning 0 (S_OK) would mean "factory created
+// (called by apphelp's compat pass), returning 0 was observed to be
+// accepted by apphelp — it continues the load. We don't have public
+// documentation of the API's semantics; what we have is empirical
+// evidence (debugger and minidump analysis on the actual DXMD startup
+// path) that 0 is the right answer. For CreateDXGIFactory, returning
+// 0 (S_OK) would mean "factory created
 // successfully" and the caller would dereference the uninitialized
 // output pointer and crash. So:
 //

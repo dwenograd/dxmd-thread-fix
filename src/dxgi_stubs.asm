@@ -58,7 +58,8 @@
 ; their trap, which returns a clean failure code.
 ;
 ; The trap return values are documented in dtf_traps.cpp. Summary:
-;   - generic exports: 0 (apphelp treats as "no shim handled")
+;   - generic exports: 0 (empirically accepted by apphelp's compat
+;     pass during DXMD startup; not a documented guarantee)
 ;   - CreateDXGIFactory{,1,2} / DXGIGetDebugInterface1: zero out-pointer
 ;     and return DXGI_ERROR_NOT_FOUND (safe failure for the caller)
 ;   - DXGIDeclareAdapterRemovalSupport: DXGI_ERROR_NOT_FOUND

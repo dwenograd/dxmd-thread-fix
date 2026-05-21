@@ -19,10 +19,13 @@
 //      including our dxgi.dll. Our DLL is on disk and now in memory.
 //
 //   2. **Before** running our DllMain, the OS loader invokes
-//      apphelp.dll — the app-compat shim layer. For executables
+//      apphelp.dll's app-compat shim engine. For executables
 //      flagged for compat fixups (DXMD is, like most pre-Win10 AAA
-//      games), apphelp scans the loaded DLLs for known compat-
-//      relevant exports and pokes them with per-app strings.
+//      games), apphelp runs on the DLLs being loaded and pokes
+//      known compat-relevant exports with per-app strings. This is
+//      what we have empirically observed in the DXMD startup path
+//      via debugger and minidump analysis; we don't claim it as a
+//      universal "every DLL, every Windows version" guarantee.
 //
 //   3. For dxgi specifically, apphelp resolves and calls
 //      `SetAppCompatStringPointer` on the dxgi module that's about to
@@ -82,9 +85,13 @@
 // So the traps are split by signature:
 //
 //   - `dtf_trap_pre_resolve`         (returns 0): apphelp compat-pass
-//     exports, undocumented PIX/DXGID3D10 internals where 0 is safe
-//     (these aren't called pre-DllMain in practice; the trap is just
-//     belt-and-suspenders).
+//     exports (where empirically 0 is accepted), and undocumented
+//     PIX/DXGID3D10 internals as a best-effort fallback. For the
+//     undocumented exports we have no semantic proof that 0 is safe;
+//     the trap is belt-and-suspenders for the case where the host
+//     OS doesn't export the function AND something calls it. In
+//     practice these aren't called pre-DllMain — we use the same
+//     generic trap mostly for consistency.
 //
 //   - `dtf_trap_CreateDXGIFactory`   (REFIID, void**): zeros the out-
 //     pointer, returns DXGI_ERROR_NOT_FOUND. Used for

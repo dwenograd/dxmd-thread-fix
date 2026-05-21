@@ -11,7 +11,8 @@
 # Notes for users building from source:
 #   - This script handles paths with spaces (we quote everything).
 #   - Output goes to dist\dxgi.dll (a single ~150 KB file).
-#   - Optional debug symbols go to dist\dxgi.pdb.
+#   - Debug builds also emit dist\dxgi.pdb; Release builds do not
+#     (we don't pass /DEBUG to the linker in Release mode).
 #   - Self-builds are NOT expected to match the SHA-256 of official
 #     release binaries byte-for-byte; MSVC embeds timestamps, GUIDs,
 #     and absolute paths that differ between machines. Verify the
@@ -308,7 +309,11 @@ if ($Config -eq 'Release') {
     #          (See dtf_traps.cpp note — this can fold two trap
     #          functions with identical machine code to one address,
     #          which is safe but worth knowing when debugging.)
-    # /RELEASE: sets the PE characteristics IMAGE_FILE_RELEASE bit.
+    # /RELEASE: writes a PE image checksum into the optional header
+    #          (mostly cosmetic for DLLs — the OS doesn't enforce
+    #          it — but conventional for shipping binaries and good
+    #          hygiene). There is NO IMAGE_FILE_RELEASE bit despite
+    #          the flag's name; it just affects the checksum field.
     $linkFlags += @('/LTCG', '/OPT:REF', '/OPT:ICF', '/RELEASE')
 } else {
     $linkFlags += @('/DEBUG')
