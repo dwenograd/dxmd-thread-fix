@@ -79,14 +79,7 @@ Remove-Item -LiteralPath (Join-Path $dist 'dxmd-thread-fix.log') -Force -ErrorAc
 # -- Sources -------------------------------------------------------------
 
 $cppSources = @(
-    'src\dllmain.cpp',
-    'src\config.cpp',
-    'src\log.cpp',
-    'src\topology.cpp',
-    'src\dxgi_exports.cpp',
-    'src\dtf_traps.cpp',
-    'src\cpu_hooks.cpp',
-    'src\path_util.cpp'
+    'src\dxmd_thread_fix.cpp'
 )
 $cSources = @(
     'third_party\minhook\src\buffer.c',

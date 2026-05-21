@@ -9,12 +9,11 @@
 #
 # The zip contains everything an end-user needs:
 #   dxgi.dll
-#   dxmd-thread-fix.ini
 #   README.md
 #   LICENSE
 #   CHANGELOG.md
 #   SHA256SUMS.txt
-#   install.ps1, uninstall.ps1 (optional, for users who want them)
+#   docs/                                       (full doc set)
 #   third_party/minhook/LICENSE.txt
 #   third_party/minhook/PROVENANCE.md
 #
@@ -23,10 +22,10 @@
 # Usage:
 #   pwsh -File package.ps1                  # build then package
 #   pwsh -File package.ps1 -SkipBuild       # use existing dist/dxgi.dll
-#   pwsh -File package.ps1 -Version 1.0.0   # override version string
+#   pwsh -File package.ps1 -Version 1.1.0   # override version string
 
 param(
-    [string]$Version = '1.0.0',
+    [string]$Version = '1.1.0',
     [switch]$SkipBuild
 )
 
@@ -87,12 +86,15 @@ Write-Host "=== Staging release into $stage ===" -ForegroundColor Cyan
 
 # Top-level files
 Copy-Item -LiteralPath $dll                                          -Destination $stage
-Copy-Item -LiteralPath (Join-Path $root 'dxmd-thread-fix.ini')       -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'README.md')                 -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE')                   -Destination $stage
 Copy-Item -LiteralPath (Join-Path $root 'CHANGELOG.md')              -Destination $stage
-Copy-Item -LiteralPath (Join-Path $root 'install.ps1')               -Destination $stage
-Copy-Item -LiteralPath (Join-Path $root 'uninstall.ps1')             -Destination $stage
+
+# Full doc set (for offline reference once the zip is extracted)
+$docsSrc = Join-Path $root 'docs'
+if (Test-Path -LiteralPath $docsSrc) {
+    Copy-Item -LiteralPath $docsSrc -Destination $stage -Recurse
+}
 
 # MinHook attribution (BSD-2-Clause requires preserving the license)
 $mhDest = Join-Path $stage 'third_party\minhook'

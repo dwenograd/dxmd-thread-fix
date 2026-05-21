@@ -101,7 +101,7 @@ Critical for the **private** dxgi exports (`DXGID3D10*`, `PIX*`,
 documented.
 
 `pfn_CreateDXGIFactory` and friends are 64-bit globals in `.data`,
-declared in `src/dxgi_exports.cpp`. They're overwritten in our
+declared in `src/dxmd_thread_fix.cpp (SECTION 6)`. They're overwritten in our
 DllMain with the real System32 dxgi addresses by
 `load_system_dxgi_and_resolve()`.
 
@@ -135,7 +135,7 @@ Our asm stub did `jmp [NULL]` and the process died at fault
 address 0.
 
 Fix: every `pfn_FOO` is initialized at **compile time** to point at
-a no-op trap function (see `src/dtf_traps.cpp`). The asm stubs always
+a no-op trap function (see `src/dxmd_thread_fix.cpp (SECTION 1)`). The asm stubs always
 land on valid code, even before our DllMain runs. Apphelp asks "did
 you handle this compat string?", the trap returns 0 (which the
 apphelp code path observed during DXMD startup accepts as a
@@ -176,7 +176,7 @@ pointing at their trap.
 
 ## Step 3: hooking the CPU APIs
 
-`src/cpu_hooks.cpp` installs inline detours via [MinHook][mh] on
+`src/dxmd_thread_fix.cpp (SECTION 7)` installs inline detours via [MinHook][mh] on
 **six** CPU/topology APIs:
 
 - `GetSystemInfo`
@@ -218,7 +218,7 @@ nobody in the DXMD process does it.
 
 ### Three-pass install (Pass 1: create, Pass 2: publish, Pass 3: enable)
 
-`install_cpu_hooks()` in `cpu_hooks.cpp` is more elaborate than it
+`install_cpu_hooks()` in `dxmd_thread_fix.cpp` SECTION 7 is more elaborate than it
 looks at first glance:
 
 - **Pass 1**: `MH_CreateHook` for every API. Collect (target, tramp)
@@ -310,7 +310,7 @@ games corroborate it.
 A few of the patterns in the source exist not for the happy path
 but for specific edge cases we discovered during review:
 
-### Host process check (`host_is_dxmd()` in `dllmain.cpp`)
+### Host process check (`host_is_dxmd()` in `dxmd_thread_fix.cpp` SECTION 8)
 
 If our DLL is accidentally loaded into a non-DXMD process (someone
 copies it to the wrong folder, or it gets dropped next to a
@@ -323,19 +323,19 @@ This is a LOLBin (living-off-the-land binary) protection: even if
 someone tried to repurpose our DLL as a way to lie about CPU count
 in some unrelated app, our DLL refuses.
 
-### Long-path-safe `GetModuleFileNameW` (`path_util.cpp`)
+### Long-path-safe `GetModuleFileNameW` (`dxmd_thread_fix.cpp` SECTION 3)
 
 Windows has had >MAX_PATH paths since long-path support was added
 (opt-in per user). Our DLL has three places that need module paths
 (DLL self for INI/log discovery, host EXE for the DXMD check). Each
-uses the dynamic-buffer retry pattern from `path_util.cpp`: start
+uses the dynamic-buffer retry pattern from `dxmd_thread_fix.cpp` SECTION 3: start
 at MAX_PATH, double the buffer up to 32K wchars on truncation, free
 cleanly on failure.
 
 The previous fixed-MAX_PATH approach would silently disable INI/log
 and host detection on deeply-nested installs. Now everything scales.
 
-### Crash-safe logging (`log.cpp`)
+### Crash-safe logging (`dxmd_thread_fix.cpp` SECTION 4)
 
 `log_line()` opens the file, writes one line, closes the file —
 every time. That's slower than holding it open, but means every
@@ -350,7 +350,7 @@ The startup-truncate-then-append pattern means each game run
 overwrites the prior log. So "send me your log" from a support
 forum gets the current run's diagnostics, not 50 launches' worth.
 
-### Consistent fake topology (`topology.h`/`topology.cpp`)
+### Consistent fake topology (`dxmd_thread_fix.cpp` SECTION 5/`dxmd_thread_fix.cpp` SECTION 5)
 
 Every hook reads from one `FakeTopology` struct. Returning
 inconsistent values across APIs (8 from `GetSystemInfo`, 64 from
@@ -364,7 +364,7 @@ values. After hooks are installed, the API code itself is patched —
 `GetProcAddress` returns the same exported address as before, but
 calling that address enters our detour. Running `set_topology()`
 post-hook would feed our own lies back into our "real" topology. The
-call order in `dllmain.cpp::attach()` is correct; this is documented
+call order in `dxmd_thread_fix.cpp SECTION 8::attach()` is correct; this is documented
 inline as a maintenance invariant.
 
 ---
@@ -399,9 +399,7 @@ VERSIONINFO is embedded (`src/version.rc`) so:
 
 What this DLL is allowed to do, at runtime:
 
-- Read `dxmd-thread-fix.ini` next to itself (via
-  `GetPrivateProfileIntW`).
-- Write `dxmd-thread-fix.log` next to itself, only when `LogLevel > 0`.
+- Write `dxmd-thread-fix.log` next to itself.
 - Load the real `dxgi.dll` from the OS system directory returned by
   `GetSystemDirectoryW` (normally `C:\Windows\System32` on a default
   Windows install; can differ on non-default installs).
@@ -429,12 +427,9 @@ allows) vs. what the source actually shows it doing:
   capability via that route.
 - Project-controlled files this source explicitly opens, writes,
   or loads at runtime:
-    * READ:  `dxmd-thread-fix.ini` next to the DLL (via
-      `GetPrivateProfileIntW` — values are integers clamped to small
-      ranges, no string injection surface).
-    * WRITE: `dxmd-thread-fix.log` next to the DLL, only if
-      LogLevel > 0 — opened+written+closed per line (see
-      `log.cpp::log_line`).
+    * WRITE: `dxmd-thread-fix.log` next to the DLL — opened, written,
+      and closed per line (see
+      `dxmd_thread_fix.cpp SECTION 4::log_line`).
     * LOAD:  the real dxgi.dll from the OS system directory
       returned by `GetSystemDirectoryW` (normally
       `C:\Windows\System32\dxgi.dll`).
@@ -461,20 +456,21 @@ allows) vs. what the source actually shows it doing:
 
 ## Reading order
 
-If you want to skim the source roughly in order of "what runs first":
+The C++ source is one translation unit, `src/dxmd_thread_fix.cpp`,
+laid out top-to-bottom in roughly "what runs first" order:
 
-1. [`dxgi.def`](dxgi.def) — what we claim to export
-2. [`dxgi_stubs.asm`](dxgi_stubs.asm) — the export bodies
-3. [`dxgi_exports.cpp`](dxgi_exports.cpp) — `pfn_FOO` initializers and resolver
-4. [`dtf_traps.cpp`](dtf_traps.cpp) — the trap functions
-5. [`dllmain.cpp`](dllmain.cpp) — entry point and `attach()` sequence
-6. [`config.cpp`](config.cpp) — INI parsing
-7. [`log.cpp`](log.cpp) — logging
-8. [`topology.cpp`](topology.cpp) — fake CPU topology
-9. [`cpu_hooks.cpp`](cpu_hooks.cpp) — MinHook detour install and the hook bodies
-10. [`path_util.cpp`](path_util.cpp) — shared long-path-safe helper
-11. [`version.rc`](version.rc) — VERSIONINFO resource
+1. [`dxgi.def`](../src/dxgi.def) — what we claim to export
+2. [`dxgi_stubs.asm`](../src/dxgi_stubs.asm) — the export bodies (tail-jump stubs)
+3. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 1 — trap functions (load-bearing pre-DllMain stubs)
+4. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 2 — `pfn_FOO` globals consumed by the asm
+5. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 3 — long-path-safe path utilities
+6. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 4 — crash-safe file logger
+7. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 5 — fake CPU topology state
+8. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 6 — load System32 dxgi.dll, resolve exports
+9. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 7 — MinHook detour install + the 7 hook bodies
+10. [`dxmd_thread_fix.cpp`](../src/dxmd_thread_fix.cpp) SECTION 8 — `DllMain`, `attach()`, and `detach()`
+11. [`version.rc`](../src/version.rc) — VERSIONINFO resource
 
-Each file's header comment is self-contained — you shouldn't need to
-read them in any particular order if you're chasing a specific
+Each section's banner comment is self-contained — you shouldn't need
+to read them in any particular order if you're chasing a specific
 question.

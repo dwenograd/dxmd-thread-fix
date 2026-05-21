@@ -1,32 +1,19 @@
 // version.rc - Windows VERSIONINFO resource for dxgi.dll.
 //
-// Embedded in the DLL so:
-//   - Users can verify identity via right-click → Properties → Details.
-//     ProductName should read "dxmd-thread-fix".
-//   - Antivirus / Windows Defender heuristics can recognize the binary
-//     as a named, versioned project rather than an anonymous unsigned
-//     DLL. Reduces (but does not eliminate) false-positive rate.
-//   - install.ps1 and uninstall.ps1 use the ProductName field as a
-//     convenience identity check ("is this our DLL or someone else's
-//     dxgi.dll?") that's robust across our own version bumps —
-//     upgrading from v1.0 to v1.1 won't trigger the foreign-mod-
-//     detected path, because the ProductName still matches. NOTE:
-//     this is NOT a cryptographic authenticity check. Any DLL can
-//     set ProductName="dxmd-thread-fix" in its VERSIONINFO, so the
-//     scripts use this to avoid accidentally clobbering a foreign
-//     mod's DLL, not to prove the DLL is genuinely ours. Trust the
-//     SHA-256 hashes in our GitHub release manifest for that.
+// Embedded in the DLL so users can verify identity via right-click →
+// Properties → Details. ProductName reads "dxmd-thread-fix". This is
+// a convenience identity check, NOT a cryptographic authenticity
+// check (any DLL can set ProductName). Trust the SHA-256 hashes in
+// the GitHub release manifest for that.
 //
-// Update this file at every version bump:
-//   - DTF_VERSION (the 4-int tuple)
-//   - DTF_VERSION_STR (the human string)
+// Update DTF_VERSION and DTF_VERSION_STR at every version bump.
 // FileVersion and ProductVersion get the same value — there's no
 // distinction worth making in a single-binary project like this.
 
 #include <winver.h>
 
-#define DTF_VERSION         1, 0, 0, 0
-#define DTF_VERSION_STR     "1.0.0.0"
+#define DTF_VERSION         1, 1, 0, 0
+#define DTF_VERSION_STR     "1.1.0.0"
 #define DTF_COMPANY         "dxmd-thread-fix"
 #define DTF_PRODUCT         "dxmd-thread-fix"
 #define DTF_DESC            "Thread-count crash fix for Deus Ex: Mankind Divided"
@@ -34,7 +21,7 @@
 #define DTF_INTERNAL_NAME   "dxgi.dll"
 #define DTF_ORIGINAL_NAME   "dxgi.dll"
 #define DTF_COPYRIGHT       "MIT licensed. See https://github.com/dwenograd/dxmd-thread-fix"
-#define DTF_COMMENTS        "Not affiliated with Eidos, Square Enix, or Microsoft. Proxies the system dxgi.dll and installs MinHook detours on six CPU-topology APIs (plus optionally SetThreadAffinityMask when ClampAffinity=1 in dxmd-thread-fix.ini)."
+#define DTF_COMMENTS        "Not affiliated with Eidos, Square Enix, or Microsoft. Proxies the system dxgi.dll and installs MinHook detours on six CPU-topology APIs."
 
 VS_VERSION_INFO VERSIONINFO
     FILEVERSION     DTF_VERSION

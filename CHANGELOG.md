@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented here.
 
+## v1.1.0 (2026-05-21)
+
+### Drop-in DLL, no INI, no installer scripts
+
+User-facing simplification pass over v1.0.0. The fix behavior is
+unchanged; the surface area is much smaller.
+
+- **No more INI.** The three v1.0.0 INI knobs
+  (`LogicalProcessors`, `ClampAffinity`, `LogLevel`) were never tuned
+  in practice. They're now hardcoded constants in
+  `src/dxmd_thread_fix.cpp` (defaults: `8`, `false`, `1`). Edit and
+  recompile if you genuinely need different values — see
+  [`docs/BUILDING.md`](docs/BUILDING.md).
+- **No more PowerShell installer.** `install.ps1` and `uninstall.ps1`
+  are removed. Install = drop `dxgi.dll` into `retail\`. Uninstall =
+  delete it.
+- **Single-file C++ source.** The 7 `.cpp` + 5 `.h` files in `src/`
+  collapsed into one `src/dxmd_thread_fix.cpp` (plus the inherently-
+  separate `.asm`, `.def`, `.rc` toolchain inputs). The ABI surface
+  (20 exports, same ordinals, same names) is byte-identical to
+  v1.0.0; the only import-table change is `GetPrivateProfileIntW`
+  removed (no INI to read).
+- **Heavy README sections moved to `docs/`.** Trust / auditing,
+  compatibility, troubleshooting, building, and the architectural
+  design narrative now each have their own file under
+  [`docs/`](docs/). The README is a short drop-in guide.
+
+### Migrating from v1.0.0
+
+If you used `install.ps1` to install v1.0.0:
+
+- Your `<game>\retail\dxgi.dll` will be replaced by v1.1.0's via the
+  same drop-in step (or just leave v1.0.0 in place if it's working;
+  v1.1.0 has no different runtime behavior with default settings).
+- The leftover `<game>\retail\dxmd-thread-fix.ini` from v1.0.0 is
+  ignored by v1.1.0 and can be deleted.
+
 ## v1.0.0 (2026-05-21)
 
 ### What this is
