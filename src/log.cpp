@@ -85,16 +85,21 @@ void log_init_deferred(HMODULE self) {
     // the log file (even empty), a privacy-aware user couldn't easily
     // verify the DLL is silent. With deferred init:
     //
-    //   - LogLevel=0  → no log file exists on disk after a session.
-    //                   The DLL is provably silent (you can prove it
-    //                   by deleting the log file and checking it
-    //                   doesn't reappear).
-    //   - LogLevel>=1 → log file is created on first log_line call.
+    //   - LogLevel=0  → no log file is ever created or touched. The
+    //                   DLL is provably silent (delete the log file
+    //                   and confirm it doesn't reappear after launch).
+    //   - LogLevel>=1 → log_set_level(level) below calls log_open()
+    //                   which creates (and truncates) the log file
+    //                   immediately — BEFORE the first log_line call,
+    //                   so the file exists from the start of the
+    //                   session even if no log line has been emitted
+    //                   yet. Subsequent log_line calls append per-
+    //                   line with the open/write/close pattern.
     //
     // The cost is two-stage init in dllmain.cpp: log_init_deferred
     // FIRST (so the critical section exists before any thread might
-    // hit log_line), then load_config, then log_set_level which calls
-    // log_open if LogLevel > 0.
+    // hit log_line), then load_config, then log_set_level which
+    // calls log_open if LogLevel > 0.
 }
 
 // Truncating CreateFileW (CREATE_ALWAYS) used here, NOT append. This

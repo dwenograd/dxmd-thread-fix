@@ -297,11 +297,19 @@ int install_cpu_hooks(bool clamp_affinity) {
     // MinHook returns MH_ERROR_ALREADY_INITIALIZED rather than crashing.
     // We track whether WE were the ones to initialize, so that on a
     // later failure-path we only call MH_Uninitialize if we actually
-    // own the MinHook lifetime. (If MinHook was already initialized
-    // when we entered, some other code in the process — extremely
-    // unlikely in DXMD but possible if e.g. another mod-loader
-    // pre-initialized MinHook — owns it and we don't want to tear
-    // its state down.)
+    // own the MinHook lifetime.
+    //
+    // Why this matters even though MinHook is statically vendored:
+    // because MinHook is compiled into THIS DLL, its globals are
+    // private to this DLL. Another mod in the process with its own
+    // statically-linked MinHook copy has its own separate globals
+    // and can't possibly initialize ours. The MH_ERROR_ALREADY_INITIALIZED
+    // path here is effectively defensive against our own DllMain
+    // running twice (which it shouldn't — Windows calls DLL_PROCESS_ATTACH
+    // exactly once per LoadLibrary — but if some future change ever
+    // routed install_cpu_hooks() through a code path that could
+    // re-enter, the bookkeeping below prevents us from tearing down
+    // a still-in-use MinHook state on the second exit).
     bool we_initialized_mh = false;
     MH_STATUS s = MH_Initialize();
     if (s == MH_OK) {

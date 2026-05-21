@@ -71,8 +71,9 @@ wchar_t* get_module_path(HMODULE module) {
 
         // CRITICAL: HeapReAlloc behavior on failure.
         // If HeapReAlloc returns NULL, the ORIGINAL `path` is still
-        // alive and owned by us. (This is unlike `realloc()` in C —
-        // same semantics but easy to forget.) We must NOT do
+        // alive and owned by us. (Same as C `realloc()` failure
+        // semantics — the original allocation stays valid and must
+        // still be freed — but easy to forget.) We must NOT do
         //     path = HeapReAlloc(...);
         // because if it returns NULL we'd lose the original pointer
         // and leak it. Instead we capture into a temporary and only

@@ -16,14 +16,22 @@
 //
 // The whole point of this DLL is to lie about CPU count BEFORE the
 // game starts calling GetSystemInfo. At the moment our DllMain runs,
-// the Windows loader has only just begun processing DXMD's static
-// import list. ApexFramework, PhysX*, fmod, bink, amd_ags - and their
-// DllMains - have NOT been loaded yet. Several of those DllMains
-// (verified via dumpbin) call GetSystemInfo themselves. If we punted
-// our hook install to a worker thread, the worker wouldn't get
-// scheduled before those other DllMains ran, they'd get the REAL CPU
-// count, size their thread pools for 64 cores, and the original
-// crash would still happen.
+// the Windows loader is still processing DXMD's static import graph —
+// most of DXMD's middleware modules (ApexFramework, PhysX*, fmod,
+// bink, amd_ags) have not yet had their own initialization code run.
+// Several of those modules import GetSystemInfo and other topology
+// APIs (verifiable via dumpbin /imports); if any of them happens to
+// call those APIs early in its own initialization, it would see the
+// real CPU count before we'd had a chance to hook anything. If we
+// punted our hook install to a worker thread, the worker wouldn't
+// get scheduled before those middleware modules ran their init code,
+// and the original crash would still happen.
+//
+// (Whether a given middleware actually calls these APIs from its
+// DllMain vs. somewhere later in its init is module-specific and not
+// something dumpbin alone can prove — but the safe assumption is "as
+// early as the loader's first chance to run their code." Installing
+// hooks synchronously in our DllMain puts us before all of that.)
 //
 // Doing the install synchronously in DllMain is safe in our specific
 // case because:
@@ -31,12 +39,29 @@
 //       It writes to executable code pages via VirtualProtect on
 //       addresses we resolved via GetProcAddress (whose results are
 //       stable in DllMain).
-//   (b) MinHook's SuspendThread-on-other-threads loop has no other
-//       threads to freeze — we don't create any, and the only thread
-//       at this point in process startup is the loader thread (us).
-//   (c) The recursive LoadLibrary of System32\dxgi.dll is the one
-//       form of recursive load that's actually safe in practice;
-//       system DLLs have trivial DllMains.
+//   (b) MinHook's SuspendThread-on-other-threads loop iterates over
+//       threads in the process. In the normal DXMD startup path
+//       we target, no DXMD-created worker threads exist yet —
+//       MinHook ends up with nothing to suspend. (Injected
+//       tooling, AV runtime instrumentation, or other DLL DllMains
+//       in the import graph could in principle have created
+//       threads earlier; we've not observed this in DXMD's
+//       startup, and it's outside our supported scenario.)
+//   (c) We DO recursively LoadLibrary System32\dxgi.dll from our
+//       DllMain. This is loader-lock-sensitive and explicitly
+//       discouraged by general MSDN guidance. We do it anyway
+//       because (1) the entire purpose of a dxgi-proxy DLL is to
+//       forward exports to the real dxgi, which requires the real
+//       dxgi to be loaded before the game's import resolution
+//       continues; (2) we constrain the recursive load to the
+//       absolute System32\dxgi.dll path (built from
+//       GetSystemDirectoryW), eliminating search-path attack
+//       surface and guaranteeing the target is a system DLL whose
+//       own DllMain is well-tested by the OS vendor. We have
+//       validated this works in the DXMD startup path through
+//       extensive in-game testing. This is not general DllMain
+//       advice — it's a constrained, validated tradeoff specific
+//       to proxy-DLL forwarding.
 //
 // Every dxgi-proxy game mod in the wild (Special K, ReShade, ENBSeries,
 // etc.) uses this exact pattern. Decades of production use confirms

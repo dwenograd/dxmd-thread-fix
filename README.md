@@ -619,9 +619,11 @@ topology.
 ### The subtle bit
 
 The Windows loader's app-compatibility shim layer (`apphelp.dll`)
-runs a compat-fixup pass on every loaded DLL **before** running the
-DLL's entry point. For dxgi specifically, that pass calls some of
-dxgi's compat exports (notably `SetAppCompatStringPointer`) to apply
+runs a compat-fixup pass on DLLs in the process **before** running
+each DLL's entry point. For executables flagged for compat fixups
+(DXMD is, like most pre-Win10 AAA games), and for dxgi specifically,
+that pass calls some of dxgi's compat exports (notably
+`SetAppCompatStringPointer`) to apply
 OS-level fixups.
 
 If our dxgi export stubs jumped through null pointers at that point,
@@ -704,15 +706,19 @@ The Release build uses:
 - `/W4 /EHsc /std:c++17` — high warning level, EH semantics, C++17.
 - `/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT` — explicit security mitigations.
 - **No `/guard:cf`** — Control Flow Guard instruments indirect calls in
-  our compiled code with a runtime check against a build-time-generated
-  bitmap of legal call targets. `cpu_hooks.cpp` calls the original
-  (unhooked) API implementations through MinHook-provided trampolines
-  (`g_real_GetSystemInfo`, etc.) which are executable memory MinHook
-  allocates at runtime via `VirtualAlloc` — those addresses are by
-  definition not in our build-time CFG bitmap, so /guard:cf would
-  terminate the process on the first call into a trampoline. (MinHook
-  upstream has discussed CFG-aware trampolines; v1.3.3 doesn't ship
-  that yet. Out of scope for v1.0.0.)
+  compiled code with a runtime check against a bitmap of legal call
+  targets. `cpu_hooks.cpp` calls the original (unhooked) API
+  implementations through MinHook-provided trampolines
+  (`g_real_GetSystemInfo`, etc.) — function pointers into runtime-
+  allocated executable memory MinHook obtains via `VirtualAlloc`.
+  Whether those runtime targets are valid under CFG depends on the
+  Windows version and on whether MinHook registers them
+  (`SetProcessValidCallTargets`); the v1.3.3 release we vendor does
+  not. We have not validated /guard:cf + our MinHook vintage across
+  the Windows versions we support, so enabling CFG could turn a
+  working install into a hard crash for some users. Validating that
+  is out of scope for v1.0.0; the other mitigations (DEP, ASLR,
+  /GS stack cookies, /sdl, static CRT) are still on.
   Note: `dumpbin /loadconfig dist\dxgi.dll` shows some CFG-related load
   config metadata (e.g. `Guard CF address of check-function pointer`,
   `Guard Flags: CF instrumented`). That metadata comes from the static

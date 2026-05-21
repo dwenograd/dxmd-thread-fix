@@ -105,8 +105,9 @@ The very first attempt at this fix initialized every `pfn_FOO` to
 during process startup**, before our DllMain ever ran.
 
 Root cause: the Windows loader runs an application-compatibility
-shim pass (`apphelp.dll`) on every loaded DLL **before** running the
-DLL's entry point. For dxgi specifically, that pass calls some of
+shim pass (`apphelp.dll`) on DLLs in the process **before** running
+each DLL's entry point. For executables flagged for compat fixups
+(DXMD is) and for dxgi specifically, that pass calls some of
 dxgi's compat-namespace exports (notably `SetAppCompatStringPointer`)
 to apply OS-level fixups. Our asm stub did `jmp [NULL]` and the
 process died at fault address 0.
@@ -222,13 +223,19 @@ We do, deliberately, because:
 
 - **By the time our DllMain runs, the loader has only just begun
   processing DXMD's static imports.** ApexFramework, PhysX*, fmod,
-  bink, amd_ags — and their DllMains — have NOT been loaded yet.
-  Several of those DllMains call GetSystemInfo. If we deferred hook
-  install to a worker thread, we'd miss those calls.
+  bink, amd_ags — have not had their initialization code run yet.
+  Several of those modules import topology APIs (visible in dumpbin
+  /imports) and may call them during their own init; if we deferred
+  our hook install to a worker thread, the worker wouldn't be
+  scheduled before those modules ran their init code and the crash
+  would still happen.
 
 - **MinHook's `SuspendThread`-on-all-others loop is safe here**
-  because the only other thread that could exist is one we created
-  ourselves; we don't create any.
+  because in the normal DXMD startup path we target, no DXMD-
+  created worker threads exist yet — MinHook ends up with no
+  threads to suspend. (Injected tools or AV instrumentation could
+  in principle have created threads earlier; not observed, and
+  outside our supported scenario.)
 
 - **MinHook does not call LoadLibrary or take the loader lock
   itself.** It writes to executable code pages we resolve via
@@ -247,12 +254,15 @@ games corroborate it.
 
 - **No `/guard:cf`** (Control Flow Guard) in the build. cpu_hooks.cpp
   calls the original APIs through MinHook trampolines stored in
-  `g_real_*` function pointers; those trampolines are executable
-  memory MinHook allocates at runtime via `VirtualAlloc`, so they
-  aren't in the build-time CFG bitmap. With /guard:cf enabled the
-  first call into a trampoline would terminate the process. The
-  static CRT brings in some CFG-related load-config metadata anyway,
-  but the `IMAGE_DLLCHARACTERISTICS_GUARD_CF` bit is not set on our
+  `g_real_*` function pointers; those trampolines live in runtime-
+  allocated executable memory (MinHook uses `VirtualAlloc`). Whether
+  CFG accepts such targets depends on Windows version and on whether
+  MinHook calls `SetProcessValidCallTargets` to register them — the
+  v1.3.3 release we vendor does not. Rather than risk breaking the
+  install on some unknown subset of Windows versions, we leave CFG
+  off for v1.0.0 (the other mitigations are still on). The static
+  CRT brings in some CFG-related load-config metadata anyway, but
+  the `IMAGE_DLLCHARACTERISTICS_GUARD_CF` bit is not set on our
   image so the OS loader doesn't enforce CFG on us.
 
 - **No work in DLL_PROCESS_DETACH when `lpReserved != nullptr`**

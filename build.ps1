@@ -157,29 +157,32 @@ if ($Config -eq 'Release') {
     #
     # /guard:cf    — Control Flow Guard. Instruments indirect calls
     #                in our compiled code with a runtime check
-    #                against a compile-time-generated bitmap of
-    #                legal call targets. If a call target isn't in
-    #                the bitmap, the process is terminated.
+    #                against a bitmap of legal call targets.
     #
     #                Why we don't enable it: cpu_hooks.cpp calls the
     #                original (pre-hook) API implementations through
-    #                MinHook-provided trampolines — function pointers
-    #                stored in `g_real_GetSystemInfo`,
-    #                `g_real_GetActiveProcessorCount`, etc.
-    #                Those trampolines are executable memory that
-    #                MinHook ALLOCATES AT RUNTIME (via VirtualAlloc),
-    #                so by definition they cannot be in our build-
-    #                time CFG bitmap. With /guard:cf enabled, the
-    #                first call through one of those pointers would
-    #                trip the CFG check and terminate the process.
+    #                MinHook-provided trampolines (function pointers
+    #                stored in `g_real_GetSystemInfo`, etc.). Those
+    #                trampolines live in runtime-allocated executable
+    #                memory that MinHook obtains via VirtualAlloc.
     #
-    #                MinHook upstream has discussed CFG-aware
-    #                trampoline allocation (registering the
-    #                trampoline addresses dynamically via
-    #                SetProcessValidCallTargets) but it's not in the
-    #                v1.3.3 release we ship. Validating that
-    #                integration is a separate compatibility project
-    #                deferred past v1.0.0.
+    #                Whether such runtime-allocated targets are valid
+    #                under CFG depends on the Windows version and on
+    #                whether MinHook explicitly registers them via
+    #                SetProcessValidCallTargets. The v1.3.3 release
+    #                we vendor does NOT register its trampolines. We
+    #                have NOT validated the combination of /guard:cf
+    #                + our MinHook vintage across the Windows 7 SP1
+    #                through Windows 11 range we support. Enabling
+    #                CFG without that validation could turn a working
+    #                install into "DLL loads but first hooked call
+    #                crashes the process" on some unknown subset of
+    #                users' machines.
+    #
+    #                That validation is a separate compatibility
+    #                project. For v1.0.0 we conservatively leave CFG
+    #                off; the other mitigations (DEP, ASLR, stack
+    #                cookies, /sdl, static CRT) are still on.
     #
     #                NOTE: Some CFG-related load-config metadata may
     #                still appear in the final binary because MSVC's
@@ -189,7 +192,9 @@ if ($Config -eq 'Release') {
     #                set in the PE header, which we don't set. A
     #                code-curious reader running `dumpbin /loadconfig`
     #                will see the CFG fields populated and might
-    #                think we're enabling it; we're not.
+    #                think we're enabling it; we're not. Verify with
+    #                `dumpbin /headers dxgi.dll` — the DLL
+    #                characteristics line will not include "Guard CF".
     #
     # /MD          — see /MT above. Would force a VC++ redist dep.
     #
