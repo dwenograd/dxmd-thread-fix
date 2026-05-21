@@ -31,9 +31,13 @@ Config load_config(HMODULE self) {
     c.log_level = static_cast<int>(GetPrivateProfileIntW(
         L"ThreadFix", L"LogLevel", c.log_level, path));
 
-    // Sanity clamps (further clamped to real CPU count by set_topology()).
-    if (c.logical_processors < 1)   c.logical_processors = 1;
-    if (c.logical_processors > 256) c.logical_processors = 256;
+    // Sanity clamps. `LogicalProcessors` is later re-clamped to
+    // `min(real_count, 64)` by set_topology(); we cap here at 64 too
+    // so the "config: LogicalProcessors=X" log line agrees with the
+    // effective topology cap and users aren't confused by a config
+    // value > 64 that's silently reduced later.
+    if (c.logical_processors < 1)  c.logical_processors = 1;
+    if (c.logical_processors > 64) c.logical_processors = 64;
     if (c.clamp_affinity < 0) c.clamp_affinity = 0;
     if (c.clamp_affinity > 1) c.clamp_affinity = 1;
     if (c.log_level < 0) c.log_level = 0;

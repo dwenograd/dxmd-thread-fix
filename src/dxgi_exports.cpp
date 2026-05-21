@@ -8,15 +8,19 @@
 // some dxgi exports (notably SetAppCompatStringPointer) BEFORE our
 // DllMain runs. See dtf_traps.cpp's header comment for the full story.
 //
-// Three categories of trap:
+// Five categories of trap:
 //   - dtf_trap_pre_resolve: generic, returns 0. Safe for compat-pass
 //     exports and any undocumented private export. Most exports use this.
-//   - dtf_trap_CreateDXGIFactory: zeros the out-pointer and returns
-//     DXGI_ERROR_NOT_FOUND. Used for CreateDXGIFactory, CreateDXGIFactory1.
+//   - dtf_trap_CreateDXGIFactory: zeros the (REFIID, void**) out-pointer
+//     and returns DXGI_ERROR_NOT_FOUND. Used for CreateDXGIFactory,
+//     CreateDXGIFactory1.
 //   - dtf_trap_CreateDXGIFactory2: same shape but with the extra Flags
 //     parameter. Used for CreateDXGIFactory2 and DXGIGetDebugInterface1.
 //   - dtf_trap_HRESULT_void: zero-argument, returns DXGI_ERROR_NOT_FOUND.
-//     Used for DXGIDeclareAdapterRemovalSupport and DXGIDisableVBlankVirtualization.
+//     Used for DXGIDeclareAdapterRemovalSupport.
+//   - dtf_trap_HRESULT_HANDLE: takes the documented HANDLE adapter
+//     argument, returns DXGI_ERROR_NOT_FOUND. Used for
+//     DXGIDisableVBlankVirtualization.
 //
 // After DllMain runs, every pfn_FOO that the host's System32 dxgi
 // actually exports is overwritten with the real address; only exports

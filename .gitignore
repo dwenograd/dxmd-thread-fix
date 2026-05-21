@@ -10,6 +10,10 @@ build/
 # Distributable artifacts (rebuilt by build.ps1)
 dist/dxgi.dll
 dist/*.log
+dist/*.pdb
+
+# Release packaging (rebuilt by package.ps1)
+release/
 
 # Editor/IDE
 .vs/

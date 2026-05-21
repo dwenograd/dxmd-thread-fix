@@ -81,9 +81,11 @@ imported kernel32 symbol falls into one of these buckets):
 | Exception/CRT plumbing | `IsDebuggerPresent`, `SetUnhandledExceptionFilter`, `TerminateProcess`, `RaiseException`, `GetCurrentProcess`, exception/unwind helpers | Brought in by MSVC's static C runtime (`/MT`); not used by our code |
 | Heap/string | `HeapAlloc`, `HeapFree`, `GetLastError`, `lstrlen*`, etc. | Used by MinHook and the static CRT |
 
-The only *dynamic* DLL load our code does is `LoadLibraryExW` of a
-hard-coded absolute path: `C:\Windows\System32\dxgi.dll`. See
-[`src/dxgi_exports.cpp`](src/dxgi_exports.cpp). No other dynamic loads.
+The only *dynamic* DLL load our code does is `LoadLibraryExW` of the
+absolute system-directory path resolved by `GetSystemDirectoryW()` —
+normally `C:\Windows\System32\dxgi.dll` but correctly handles non-`C:`
+Windows installs. See [`src/dxgi_exports.cpp`](src/dxgi_exports.cpp).
+No other dynamic loads.
 
 What you should **not** see (and won't):
 
@@ -107,6 +109,8 @@ What you should **not** see (and won't):
   AND `retail\dxgi.dll` already exists AND it isn't ours AND there
   isn't an existing backup. Saves the prior (foreign-mod) DLL so
   `uninstall.ps1` can restore it.
+- `._dtf_writetest_<guid>.tmp` — a transient zero-byte file written
+  and immediately deleted to test that `retail\` is writable.
 
 **By `uninstall.ps1`:**
 - Removes the three files install.ps1 created (the DLL, INI, and log)
@@ -356,10 +360,11 @@ LogLevel=1              ; 0=silent (no log), 1=normal, 2=verbose
   `SetThreadAffinityMask` calls with masks outside the first
   `LogicalProcessors` bits. Most users never need this.
 
-- **`LogLevel`** — `0` disables logging entirely (no log file is ever
-  created). `1` is the default and writes one line per hooked API plus
-  the startup banner. `2` writes a line for every hooked call (very
-  noisy; only useful when filing a bug).
+- **LogLevel** — `0` disables logging entirely: no log file is created
+  or updated for the run. An *old* log file from a previous run is
+  not deleted (we don't touch it at all). `1` is the default and writes
+  one line per hooked API plus the startup banner. `2` writes a line
+  for every hooked call (very noisy; only useful when filing a bug).
 
 ---
 
