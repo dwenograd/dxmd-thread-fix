@@ -2,8 +2,11 @@
 ;
 ; Each stub is two instructions:
 ;   jmp QWORD PTR [pfn_FOO]
-; where pfn_FOO is a 64-bit global initialized at DLL load time by the
-; resolver in dxgi_exports.cpp.
+; where pfn_FOO is a 64-bit global initialized at COMPILE TIME (in
+; dxgi_exports.cpp) to one of the trap functions in dtf_traps.cpp.
+; After our DllMain runs, the loader overwrites each pfn_FOO with the
+; real System32 dxgi function pointer. Exports missing on the host's
+; Windows version keep pointing at their trap.
 ;
 ; Tail-jumping (vs. C++ thunking) preserves the original calling
 ; convention, register state, parameter passing, and return value
@@ -12,10 +15,16 @@
 ; UpdateHMDEmulationStatus, etc.) whose prototypes are not publicly
 ; documented.
 ;
-; If pfn_FOO is null (export not present on this Windows version), the
-; jump will crash. dxgi_exports.cpp logs a warning in that case; if the
-; game actually invokes such an export, that's a Windows version
-; incompatibility, not our bug.
+; pfn_FOO is GUARANTEED non-null by the compile-time initializers in
+; dxgi_exports.cpp. The traps return:
+;   - generic exports: 0 (S_OK / nullptr / FALSE - safe for compat-pass)
+;   - CreateDXGIFactory*: DXGI_ERROR_NOT_FOUND with the out-pointer zeroed
+;   - DXGIDeclareAdapterRemovalSupport / DXGIDisableVBlankVirtualization:
+;     DXGI_ERROR_NOT_FOUND
+;
+; This means: even if our DLL loads but real System32 dxgi can't be
+; resolved, the game receives clean error codes from factory APIs
+; rather than crashing on a NULL dereference.
 
 PUBLIC ApplyCompatResolutionQuirking
 PUBLIC CompatString

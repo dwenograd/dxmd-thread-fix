@@ -1,0 +1,49 @@
+// version.rc - Windows VERSIONINFO resource for dxgi.dll.
+//
+// Embedded in the DLL so users can verify identity via right-click
+// Properties -> Details, and so antivirus / Windows Defender heuristics
+// can recognize the binary as a named, versioned project rather than an
+// anonymous unsigned DLL.
+
+#include <winver.h>
+
+#define DTF_VERSION         1, 0, 0, 0
+#define DTF_VERSION_STR     "1.0.0.0"
+#define DTF_COMPANY         "dxmd-thread-fix"
+#define DTF_PRODUCT         "dxmd-thread-fix"
+#define DTF_DESC            "Thread-count crash fix for Deus Ex: Mankind Divided"
+#define DTF_FILE_DESC       "DXGI proxy that hooks CPU-discovery APIs to fix DXMD's high-core-CPU crash"
+#define DTF_INTERNAL_NAME   "dxgi.dll"
+#define DTF_ORIGINAL_NAME   "dxgi.dll"
+#define DTF_COPYRIGHT       "MIT licensed. See https://github.com/<owner>/dxmd-thread-fix"
+#define DTF_COMMENTS        "Not affiliated with Eidos, Square Enix, or Microsoft. Proxies the system dxgi.dll and installs MinHook detours on 6 CPU-topology APIs."
+
+VS_VERSION_INFO VERSIONINFO
+    FILEVERSION     DTF_VERSION
+    PRODUCTVERSION  DTF_VERSION
+    FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+    FILEFLAGS       0
+    FILEOS          VOS__WINDOWS32
+    FILETYPE        VFT_DLL
+    FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      DTF_COMPANY
+            VALUE "FileDescription",  DTF_FILE_DESC
+            VALUE "FileVersion",      DTF_VERSION_STR
+            VALUE "InternalName",     DTF_INTERNAL_NAME
+            VALUE "LegalCopyright",   DTF_COPYRIGHT
+            VALUE "OriginalFilename", DTF_ORIGINAL_NAME
+            VALUE "ProductName",      DTF_PRODUCT
+            VALUE "ProductVersion",   DTF_VERSION_STR
+            VALUE "Comments",         DTF_COMMENTS
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04B0
+    END
+END

@@ -15,9 +15,16 @@
 namespace dtf {
 
 void log_init(HMODULE self, int level);
+void log_init_deferred(HMODULE self);   // record path but don't open file
 void log_shutdown();
 
 int  log_level();
+void log_set_level(int level);
+
+// Open and truncate the log file. Called after config is loaded if
+// LogLevel >= 1; deferred if LogLevel == 0 (so silent mode leaves no
+// artifact on disk).
+void log_open();
 
 // printf-style; null-terminated UTF-8, newline added.
 void log_line(const char* fmt, ...);

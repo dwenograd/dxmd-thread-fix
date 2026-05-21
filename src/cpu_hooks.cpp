@@ -196,46 +196,107 @@ int install_cpu_hooks(bool clamp_affinity) {
     MH_STATUS s = MH_Initialize();
     if (s != MH_OK && s != MH_ERROR_ALREADY_INITIALIZED) {
         log_line("ERROR: MH_Initialize failed: %d", (int)s);
-        return static_cast<int>(s);
+        return -1;
     }
 
-    int installed = 0;
-    int skipped   = 0;
+    // Two-pass install:
+    //   Pass 1: CreateHook for every spec; collect (target, tramp) pairs.
+    //           Required hooks must all succeed. Optional hooks may fail.
+    //   Pass 2: EnableHook for everything created in pass 1, atomically.
+    //
+    // Two-pass is required because we treat required hooks as
+    // all-or-nothing: if any required hook fails to CREATE, we must
+    // tear down anything we already created (else the game sees mixed
+    // real/fake topology).
+    struct Created {
+        LPVOID      target;
+        const char* api_name;
+        bool        required;
+        void**      pp_trampoline;
+        void*       trampoline;
+        LPVOID      detour;
+    };
+    Created created[sizeof(g_hook_specs) / sizeof(g_hook_specs[0])];
+    int n_created = 0;
+    int n_required_created = 0;
+    int n_required_total = 0;
+
     for (const auto& spec : g_hook_specs) {
-        const bool gated = !spec.always_install;
-        const bool affinity_disabled = (strcmp(spec.api_name, "SetThreadAffinityMask") == 0) && !clamp_affinity;
-        if (gated && affinity_disabled) {
-            skipped++;
+        if (spec.always_install) n_required_total++;
+
+        // Opt-out for SetThreadAffinityMask when not requested.
+        if (!spec.always_install && !clamp_affinity &&
+            strcmp(spec.api_name, "SetThreadAffinityMask") == 0) {
             continue;
         }
 
         LPVOID target = resolve_target(spec.api_name);
         if (!target) {
-            log_line("WARN: %s not exported on this Windows; skipped.", spec.api_name);
+            if (spec.always_install) {
+                log_line("ERROR: required API %s not exported on this Windows; aborting hook install.",
+                         spec.api_name);
+                goto fail;
+            }
+            log_line("INFO: optional API %s not present; skipped.", spec.api_name);
             continue;
         }
 
         void* tramp = nullptr;
         MH_STATUS cs = MH_CreateHook(target, spec.detour, &tramp);
         if (cs != MH_OK) {
-            log_line("WARN: MH_CreateHook(%s) failed: %d", spec.api_name, (int)cs);
+            if (spec.always_install) {
+                log_line("ERROR: MH_CreateHook(%s) failed: %d; aborting.",
+                         spec.api_name, (int)cs);
+                goto fail;
+            }
+            log_line("WARN: MH_CreateHook(%s) failed: %d; optional, continuing.",
+                     spec.api_name, (int)cs);
             continue;
         }
 
-        MH_STATUS es = MH_EnableHook(target);
-        if (es != MH_OK) {
-            log_line("WARN: MH_EnableHook(%s) failed: %d", spec.api_name, (int)es);
-            MH_RemoveHook(target);
-            continue;
-        }
-
+        // Publish the trampoline BEFORE EnableHook. The detour can't run
+        // yet (hook isn't enabled), but the order is documented as
+        // safer and the cost is zero.
         *spec.pp_trampoline = tramp;
-        installed++;
-        log_line("Hooked %s @ %p", spec.api_name, target);
+        created[n_created++] = Created{
+            target, spec.api_name, spec.always_install,
+            spec.pp_trampoline, tramp, spec.detour
+        };
+        if (spec.always_install) n_required_created++;
     }
 
-    log_line("CPU hook install complete: %d active, %d opt-skipped.", installed, skipped);
-    return (installed > 0) ? 0 : -1;
+    if (n_required_created != n_required_total) {
+        log_line("ERROR: only %d of %d required hooks created; aborting.",
+                 n_required_created, n_required_total);
+        goto fail;
+    }
+
+    // Pass 2: enable everything in one go. MH_EnableHook(MH_ALL_HOOKS)
+    // is atomic w.r.t. enabling - all hooks become live together, so
+    // there's no window where some are live and others aren't.
+    {
+        MH_STATUS es = MH_EnableHook(MH_ALL_HOOKS);
+        if (es != MH_OK) {
+            log_line("ERROR: MH_EnableHook(MH_ALL_HOOKS) failed: %d; aborting.", (int)es);
+            goto fail;
+        }
+    }
+
+    log_line("CPU hook install complete: %d hooks active (%d required, %d optional).",
+             n_created, n_required_created, n_created - n_required_created);
+    for (int i = 0; i < n_created; ++i) {
+        log_line("  Hooked %s @ %p%s", created[i].api_name, created[i].target,
+                 created[i].required ? " [required]" : " [optional]");
+    }
+    return 0;
+
+fail:
+    // Tear down anything we created.
+    for (int i = 0; i < n_created; ++i) {
+        MH_RemoveHook(created[i].target);
+        *created[i].pp_trampoline = nullptr;
+    }
+    return -1;
 }
 
 void remove_cpu_hooks() {

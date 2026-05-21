@@ -1,29 +1,54 @@
 #include "dxgi_exports.h"
 #include "log.h"
 
-// These pointers are referenced by the tail-jump stubs in
-// dxgi_stubs.asm. Names MUST be `pfn_<ExportName>`.
+// Trap functions live in dtf_traps.cpp. Every pfn_FOO slot is
+// initialized at compile time to one of these traps so that the asm
+// stubs in dxgi_stubs.asm never jump through a null pointer — necessary
+// because the Windows loader's app-compat shim layer (apphelp.dll) calls
+// some dxgi exports (notably SetAppCompatStringPointer) BEFORE our
+// DllMain runs. See dtf_traps.cpp's header comment for the full story.
+//
+// Three categories of trap:
+//   - dtf_trap_pre_resolve: generic, returns 0. Safe for compat-pass
+//     exports and any undocumented private export. Most exports use this.
+//   - dtf_trap_CreateDXGIFactory: zeros the out-pointer and returns
+//     DXGI_ERROR_NOT_FOUND. Used for CreateDXGIFactory, CreateDXGIFactory1.
+//   - dtf_trap_CreateDXGIFactory2: same shape but with the extra Flags
+//     parameter. Used for CreateDXGIFactory2 and DXGIGetDebugInterface1.
+//   - dtf_trap_HRESULT_void: zero-argument, returns DXGI_ERROR_NOT_FOUND.
+//     Used for DXGIDeclareAdapterRemovalSupport and DXGIDisableVBlankVirtualization.
+//
+// After DllMain runs, every pfn_FOO that the host's System32 dxgi
+// actually exports is overwritten with the real address; only exports
+// missing on the host's Windows version stay pointing at their trap.
+extern "C" void* WINAPI dtf_trap_pre_resolve(void);
+extern "C" HRESULT WINAPI dtf_trap_CreateDXGIFactory(REFIID, void**);
+extern "C" HRESULT WINAPI dtf_trap_CreateDXGIFactory2(UINT, REFIID, void**);
+extern "C" HRESULT WINAPI dtf_trap_HRESULT_void(void);
+
+// These pointers are referenced by the tail-jump stubs in dxgi_stubs.asm.
+// Names MUST be `pfn_<ExportName>`.
 extern "C" {
-    void* pfn_ApplyCompatResolutionQuirking    = nullptr;
-    void* pfn_CompatString                     = nullptr;
-    void* pfn_CompatValue                      = nullptr;
-    void* pfn_DXGIDumpJournal                  = nullptr;
-    void* pfn_PIXBeginCapture                  = nullptr;
-    void* pfn_PIXEndCapture                    = nullptr;
-    void* pfn_PIXGetCaptureState               = nullptr;
-    void* pfn_SetAppCompatStringPointer        = nullptr;
-    void* pfn_UpdateHMDEmulationStatus         = nullptr;
-    void* pfn_CreateDXGIFactory                = nullptr;
-    void* pfn_CreateDXGIFactory1               = nullptr;
-    void* pfn_CreateDXGIFactory2               = nullptr;
-    void* pfn_DXGID3D10CreateDevice            = nullptr;
-    void* pfn_DXGID3D10CreateLayeredDevice     = nullptr;
-    void* pfn_DXGID3D10GetLayeredDeviceSize    = nullptr;
-    void* pfn_DXGID3D10RegisterLayers          = nullptr;
-    void* pfn_DXGIDeclareAdapterRemovalSupport = nullptr;
-    void* pfn_DXGIDisableVBlankVirtualization  = nullptr;
-    void* pfn_DXGIGetDebugInterface1           = nullptr;
-    void* pfn_DXGIReportAdapterConfiguration   = nullptr;
+    void* pfn_ApplyCompatResolutionQuirking    = (void*)&dtf_trap_pre_resolve;
+    void* pfn_CompatString                     = (void*)&dtf_trap_pre_resolve;
+    void* pfn_CompatValue                      = (void*)&dtf_trap_pre_resolve;
+    void* pfn_DXGIDumpJournal                  = (void*)&dtf_trap_pre_resolve;
+    void* pfn_PIXBeginCapture                  = (void*)&dtf_trap_pre_resolve;
+    void* pfn_PIXEndCapture                    = (void*)&dtf_trap_pre_resolve;
+    void* pfn_PIXGetCaptureState               = (void*)&dtf_trap_pre_resolve;
+    void* pfn_SetAppCompatStringPointer        = (void*)&dtf_trap_pre_resolve;
+    void* pfn_UpdateHMDEmulationStatus         = (void*)&dtf_trap_pre_resolve;
+    void* pfn_CreateDXGIFactory                = (void*)&dtf_trap_CreateDXGIFactory;
+    void* pfn_CreateDXGIFactory1               = (void*)&dtf_trap_CreateDXGIFactory;
+    void* pfn_CreateDXGIFactory2               = (void*)&dtf_trap_CreateDXGIFactory2;
+    void* pfn_DXGID3D10CreateDevice            = (void*)&dtf_trap_pre_resolve;
+    void* pfn_DXGID3D10CreateLayeredDevice     = (void*)&dtf_trap_pre_resolve;
+    void* pfn_DXGID3D10GetLayeredDeviceSize    = (void*)&dtf_trap_pre_resolve;
+    void* pfn_DXGID3D10RegisterLayers          = (void*)&dtf_trap_pre_resolve;
+    void* pfn_DXGIDeclareAdapterRemovalSupport = (void*)&dtf_trap_HRESULT_void;
+    void* pfn_DXGIDisableVBlankVirtualization  = (void*)&dtf_trap_HRESULT_void;
+    void* pfn_DXGIGetDebugInterface1           = (void*)&dtf_trap_CreateDXGIFactory2;
+    void* pfn_DXGIReportAdapterConfiguration   = (void*)&dtf_trap_pre_resolve;
 }
 
 namespace dtf {
@@ -83,11 +108,13 @@ HMODULE load_system_dxgi_and_resolve() {
             *e.slot = reinterpret_cast<void*>(p);
             resolved++;
         } else {
-            // Not present on this Windows version. The export's stub
-            // will jmp to nullptr if invoked, but the game typically
-            // only calls exports it knows exist on its target OS.
+            // Not present on this Windows version. The slot keeps
+            // pointing at its compile-time trap (see dtf_traps.cpp).
+            // For HRESULT-returning APIs that's a typed failure stub
+            // (DXGI_ERROR_NOT_FOUND); for others it's the generic
+            // dtf_trap_pre_resolve. Either way: NOT a null pointer.
             missing++;
-            log_line("WARN: real dxgi missing export %s (this Windows: %lu)",
+            log_line("WARN: real dxgi missing export %s (this Windows: err %lu)",
                      e.name, GetLastError());
         }
     }
