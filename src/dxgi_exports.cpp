@@ -18,9 +18,9 @@
 //     parameter. Used for CreateDXGIFactory2 and DXGIGetDebugInterface1.
 //   - dtf_trap_HRESULT_void: zero-argument, returns DXGI_ERROR_NOT_FOUND.
 //     Used for DXGIDeclareAdapterRemovalSupport.
-//   - dtf_trap_HRESULT_HANDLE: takes the documented HANDLE adapter
-//     argument, returns DXGI_ERROR_NOT_FOUND. Used for
-//     DXGIDisableVBlankVirtualization.
+//   - dtf_trap_HRESULT_HANDLE: takes a HANDLE adapter argument (signature
+//     community-reverse-engineered; see dtf_traps.cpp), returns
+//     DXGI_ERROR_NOT_FOUND. Used for DXGIDisableVBlankVirtualization.
 //
 // After DllMain runs, every pfn_FOO that the host's System32 dxgi
 // actually exports is overwritten with the real address; only exports

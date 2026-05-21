@@ -83,7 +83,8 @@ $cppSources = @(
     'src\topology.cpp',
     'src\dxgi_exports.cpp',
     'src\dtf_traps.cpp',
-    'src\cpu_hooks.cpp'
+    'src\cpu_hooks.cpp',
+    'src\path_util.cpp'
 )
 $cSources = @(
     'third_party\minhook\src\buffer.c',

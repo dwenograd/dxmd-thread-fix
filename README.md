@@ -125,8 +125,10 @@ What you should **not** see (and won't):
   that `retail\` is writable.
 
 **By `uninstall.ps1`:**
-- Removes the three files install.ps1 created (the DLL, INI, and log)
-  if they're recognizably ours.
+- Removes `dxgi.dll` only if it's recognizably ours (VERSIONINFO
+  ProductName check), then removes `dxmd-thread-fix.ini` and
+  `dxmd-thread-fix.log` if present (these aren't identity-checked —
+  the names are unique to this project).
 - Restores the oldest `dxgi.dll.bak-*` (the original pre-DTF state)
   back to `dxgi.dll`, then deletes all backups.
 
@@ -623,9 +625,10 @@ the process would crash inside `apphelp.dll` before our DllMain ever
 got a chance to run. We've solved this by initializing every stub's
 target pointer at compile time to a no-op trap function defined in
 `src/dtf_traps.cpp` — so the stubs always land on valid code. Apphelp
-asks "did you handle this compat string?", our trap returns 0 ("yes,
-all good"), and the loader proceeds to run our DllMain, which
-overwrites the trap pointers with the real System32 dxgi addresses.
+asks "did you handle this compat string?", our trap returns 0
+("no shim applied; nothing further to do"), and the loader proceeds
+to run our DllMain, which overwrites the trap pointers with the real
+System32 dxgi addresses.
 
 This is exactly the issue the first attempt at this mod tripped on,
 and is documented at length in [`src/dtf_traps.cpp`](https://github.com/dwenograd/dxmd-thread-fix/blob/v1.0.0/src/dtf_traps.cpp).

@@ -1,37 +1,28 @@
 #include "config.h"
+#include "path_util.h"
 
 #include <string.h>
 
 namespace dtf {
 
-static void ini_path(HMODULE self, wchar_t* out, DWORD outLen) {
-    out[0] = 0;
-    DWORD n = GetModuleFileNameW(self, out, outLen);
-    if (n == 0 || n >= outLen) { out[0] = 0; return; }
-    for (DWORD i = n; i > 0; --i) {
-        if (out[i - 1] == L'\\' || out[i - 1] == L'/') {
-            out[i] = 0;
-            break;
-        }
-    }
-    // Defensive: confirm there's room for the filename before wcscat_s,
-    // which would otherwise invoke the CRT invalid-parameter handler
-    // (and crash the process during DllMain) on extremely long install
-    // paths. If too long, leave the path empty; load_config() will
-    // treat that as "no INI" and use defaults.
-    const wchar_t kIniName[] = L"dxmd-thread-fix.ini";
-    if (wcslen(out) + wcslen(kIniName) + 1 > outLen) {
-        out[0] = 0;
-        return;
-    }
-    wcscat_s(out, outLen, kIniName);
-}
+static Config c_defaults() { return Config{}; }
 
 Config load_config(HMODULE self) {
     Config c;
-    wchar_t path[MAX_PATH];
-    ini_path(self, path, MAX_PATH);
-    if (path[0] == 0) return c;
+    wchar_t* dir = get_module_dir(self);
+    if (!dir) return c;
+    // Build "<dir>dxmd-thread-fix.ini" into a fresh heap buffer.
+    static const wchar_t kIniName[] = L"dxmd-thread-fix.ini";
+    size_t dirLen = 0; while (dir[dirLen]) ++dirLen;
+    size_t pathLen = dirLen + (sizeof(kIniName) / sizeof(wchar_t));  // includes null
+    wchar_t* path = static_cast<wchar_t*>(HeapAlloc(GetProcessHeap(), 0, pathLen * sizeof(wchar_t)));
+    if (!path) { free_wstr(dir); return c; }
+    for (size_t i = 0; i < dirLen; ++i) path[i] = dir[i];
+    for (size_t i = 0; ; ++i) {
+        path[dirLen + i] = kIniName[i];
+        if (kIniName[i] == 0) break;
+    }
+    free_wstr(dir);
 
     // GetPrivateProfileIntW lives in kernel32 - no extra dependency.
     c.logical_processors = static_cast<int>(GetPrivateProfileIntW(
@@ -40,6 +31,8 @@ Config load_config(HMODULE self) {
         L"ThreadFix", L"ClampAffinity", c.clamp_affinity, path));
     c.log_level = static_cast<int>(GetPrivateProfileIntW(
         L"ThreadFix", L"LogLevel", c.log_level, path));
+
+    HeapFree(GetProcessHeap(), 0, path);
 
     // Sanity clamps. `LogicalProcessors` is later re-clamped to
     // `min(real_count, 64)` by set_topology(); we cap here at 64 too

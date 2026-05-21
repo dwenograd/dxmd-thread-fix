@@ -95,6 +95,7 @@
 #include "log.h"
 #include "dxgi_exports.h"
 #include "cpu_hooks.h"
+#include "path_util.h"
 
 #include <string.h>
 
@@ -104,58 +105,18 @@ static HMODULE g_self = nullptr;
 static HMODULE g_real_dxgi = nullptr;
 static bool    g_fix_active = false;
 
-// Case-insensitive ASCII compare for executable basenames.
-static bool ieq_ascii(const wchar_t* a, const wchar_t* b) {
-    while (*a && *b) {
-        wchar_t ca = *a, cb = *b;
-        if (ca >= L'A' && ca <= L'Z') ca = static_cast<wchar_t>(ca + (L'a' - L'A'));
-        if (cb >= L'A' && cb <= L'Z') cb = static_cast<wchar_t>(cb + (L'a' - L'A'));
-        if (ca != cb) return false;
-        ++a; ++b;
-    }
-    return *a == 0 && *b == 0;
-}
-
 // Returns true if the current process executable's basename is "DXMD.exe".
-//
-// On extremely long install paths (longer than MAX_PATH wchars), the
-// fixed-size buffer pattern can't hold the path. Rather than fail
-// closed (which would silently skip CPU hooks and leave the user with
-// a crashing game and no obvious clue), we grow the buffer dynamically
-// up to 32K wchars. This is the same shape as the recommended
-// GetModuleFileNameW pattern in MSDN, with explicit allocation
-// ownership tracking so we don't leak on any error path.
+// Uses the long-path-safe get_module_path() helper so it works correctly
+// on installs with paths longer than legacy MAX_PATH.
 static bool host_is_dxmd() {
-    HANDLE heap = GetProcessHeap();
-    if (!heap) return false;
-    const DWORD MAX_BUF = 32 * 1024;  // 32K wchars = 64KB, well above any real path
-    DWORD bufLen = MAX_PATH;
-    wchar_t* path = static_cast<wchar_t*>(HeapAlloc(heap, 0, bufLen * sizeof(wchar_t)));
+    wchar_t* path = get_module_path(nullptr);
     if (!path) return false;
-    DWORD n = 0;
-    bool success = false;
-    for (;;) {
-        n = GetModuleFileNameW(nullptr, path, bufLen);
-        if (n == 0) break;                          // API error
-        if (n < bufLen) { success = true; break; }  // fit (n is the length, not buffer size)
-        // n == bufLen means truncation. Grow and retry. Cap at MAX_BUF
-        // to avoid unbounded retry on a (theoretical) infinite path.
-        if (bufLen >= MAX_BUF) break;
-        DWORD newLen = bufLen * 2;
-        if (newLen > MAX_BUF) newLen = MAX_BUF;
-        wchar_t* newPath = static_cast<wchar_t*>(
-            HeapReAlloc(heap, 0, path, newLen * sizeof(wchar_t)));
-        if (!newPath) break;                        // realloc failed; keep old `path` for cleanup
-        path   = newPath;
-        bufLen = newLen;
-    }
-    if (!success) { HeapFree(heap, 0, path); return false; }
     const wchar_t* base = path;
-    for (DWORD i = 0; i < n; ++i) {
+    for (size_t i = 0; path[i]; ++i) {
         if (path[i] == L'\\' || path[i] == L'/') base = &path[i + 1];
     }
-    bool result = ieq_ascii(base, L"DXMD.exe");
-    HeapFree(heap, 0, path);
+    bool result = wstr_ieq_ascii(base, L"DXMD.exe");
+    free_wstr(path);
     return result;
 }
 

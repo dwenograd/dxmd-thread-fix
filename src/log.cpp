@@ -1,4 +1,5 @@
 #include "log.h"
+#include "path_util.h"
 
 #include <stdio.h>
 #include <stdarg.h>
@@ -8,35 +9,28 @@ namespace dtf {
 
 static CRITICAL_SECTION g_lock;
 static bool             g_lock_inited = false;
-static wchar_t          g_log_path[MAX_PATH] = {0};
+static wchar_t*         g_log_path = nullptr;   // heap-allocated; can be very long
 static int              g_level = 1;
 static bool             g_inited = false;
 
 static void compute_log_path(HMODULE self) {
-    wchar_t buf[MAX_PATH];
-    DWORD n = GetModuleFileNameW(self, buf, MAX_PATH);
-    if (n == 0 || n >= MAX_PATH) {
-        g_log_path[0] = 0;
-        return;
+    free_wstr(g_log_path);
+    g_log_path = nullptr;
+
+    wchar_t* dir = get_module_dir(self);
+    if (!dir) return;
+
+    static const wchar_t kLogName[] = L"dxmd-thread-fix.log";
+    size_t dirLen = 0; while (dir[dirLen]) ++dirLen;
+    size_t pathLen = dirLen + (sizeof(kLogName) / sizeof(wchar_t));  // includes null
+    g_log_path = static_cast<wchar_t*>(HeapAlloc(GetProcessHeap(), 0, pathLen * sizeof(wchar_t)));
+    if (!g_log_path) { free_wstr(dir); return; }
+    for (size_t i = 0; i < dirLen; ++i) g_log_path[i] = dir[i];
+    for (size_t i = 0; ; ++i) {
+        g_log_path[dirLen + i] = kLogName[i];
+        if (kLogName[i] == 0) break;
     }
-    // Strip filename, append our log name
-    for (DWORD i = n; i > 0; --i) {
-        if (buf[i - 1] == L'\\' || buf[i - 1] == L'/') {
-            buf[i] = 0;
-            break;
-        }
-    }
-    // Defensive: confirm the concatenation will fit, otherwise leave the
-    // log path empty so log_open() silently no-ops (rather than calling
-    // wcscat_s into the CRT invalid-parameter handler and crashing
-    // during DllMain on a very long install path).
-    const wchar_t kLogName[] = L"dxmd-thread-fix.log";
-    if (wcslen(buf) + wcslen(kLogName) + 1 > MAX_PATH) {
-        g_log_path[0] = 0;
-        return;
-    }
-    wcscpy_s(g_log_path, MAX_PATH, buf);
-    wcscat_s(g_log_path, MAX_PATH, kLogName);
+    free_wstr(dir);
 }
 
 void log_init(HMODULE self, int level) {
@@ -61,7 +55,7 @@ void log_init_deferred(HMODULE self) {
 
 void log_open() {
     if (!g_inited) return;
-    if (g_log_path[0] == 0) return;
+    if (!g_log_path || g_log_path[0] == 0) return;
     // Truncate on every fresh process so the log is a record of *this* run.
     HANDLE h = CreateFileW(g_log_path, GENERIC_WRITE, FILE_SHARE_READ,
                            nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -74,6 +68,8 @@ void log_shutdown() {
         DeleteCriticalSection(&g_lock);
         g_lock_inited = false;
     }
+    free_wstr(g_log_path);
+    g_log_path = nullptr;
     g_inited = false;
 }
 
@@ -87,7 +83,7 @@ void log_set_level(int level) {
 
 void log_line(const char* fmt, ...) {
     if (!g_inited || g_level <= 0) return;
-    if (g_log_path[0] == 0) return;
+    if (!g_log_path || g_log_path[0] == 0) return;
 
     char msg[1024];
     va_list ap;
