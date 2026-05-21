@@ -699,8 +699,16 @@ The Release build uses:
 - `/GS /sdl` — stack-buffer security checks and additional SDL checks.
 - `/W4 /EHsc /std:c++17` — high warning level, EH semantics, C++17.
 - `/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT` — explicit security mitigations.
-- **No `/guard:cf`** — Control Flow Guard is incompatible with MinHook's
-  runtime code patching (CFG would reject the patched function pointers).
+- **No `/guard:cf`** — Control Flow Guard instruments indirect calls in
+  our compiled code with a runtime check against a build-time-generated
+  bitmap of legal call targets. `cpu_hooks.cpp` calls the original
+  (unhooked) API implementations through MinHook-provided trampolines
+  (`g_real_GetSystemInfo`, etc.) which are executable memory MinHook
+  allocates at runtime via `VirtualAlloc` — those addresses are by
+  definition not in our build-time CFG bitmap, so /guard:cf would
+  terminate the process on the first call into a trampoline. (MinHook
+  upstream has discussed CFG-aware trampolines; v1.3.3 doesn't ship
+  that yet. Out of scope for v1.0.0.)
   Note: `dumpbin /loadconfig dist\dxgi.dll` shows some CFG-related load
   config metadata (e.g. `Guard CF address of check-function pointer`,
   `Guard Flags: CF instrumented`). That metadata comes from the static

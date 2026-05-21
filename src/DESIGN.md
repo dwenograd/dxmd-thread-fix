@@ -245,10 +245,14 @@ games corroborate it.
   avoids it because the static CRT relies on per-thread
   notifications for some internal state.
 
-- **No `/guard:cf`** (Control Flow Guard) in the build. CFG would
-  reject MinHook's runtime patched-function pointers. The static
-  CRT brings in some CFG-related load-config metadata anyway, but
-  the `IMAGE_DLLCHARACTERISTICS_GUARD_CF` bit is not set on our
+- **No `/guard:cf`** (Control Flow Guard) in the build. cpu_hooks.cpp
+  calls the original APIs through MinHook trampolines stored in
+  `g_real_*` function pointers; those trampolines are executable
+  memory MinHook allocates at runtime via `VirtualAlloc`, so they
+  aren't in the build-time CFG bitmap. With /guard:cf enabled the
+  first call into a trampoline would terminate the process. The
+  static CRT brings in some CFG-related load-config metadata anyway,
+  but the `IMAGE_DLLCHARACTERISTICS_GUARD_CF` bit is not set on our
   image so the OS loader doesn't enforce CFG on us.
 
 - **No work in DLL_PROCESS_DETACH when `lpReserved != nullptr`**
@@ -368,10 +372,18 @@ allows) vs. what the source actually shows it doing:
   `shell32!ShellExecute*` (no process-creation capability — same
   caveat: it COULD via dynamic load, but the source shows it
   doesn't).
-- It does NOT touch the file system outside its own
-  `dxmd-thread-fix.log` and the per-line CreateFileW pattern in
-  `log.cpp`. Verify with `dumpbin /imports dxgi.dll` — kernel32 is
-  the only library imported.
+- The COMPLETE list of files it touches at runtime is:
+    * READ:  `dxmd-thread-fix.ini` next to the DLL (via
+      `GetPrivateProfileIntW` — values are integers clamped to small
+      ranges, no string injection surface).
+    * WRITE: `dxmd-thread-fix.log` next to the DLL, only if
+      LogLevel > 0 — opened+written+closed per line (see
+      `log.cpp::log_line`).
+    * LOAD:  `C:\Windows\System32\dxgi.dll` (absolute path built
+      from `GetSystemDirectoryW`).
+  Verify with `dumpbin /imports dxgi.dll` — kernel32 is the only
+  library imported, so any other file access would require a
+  dynamic LoadLibrary that the source doesn't make.
 - It does NOT touch save data (`Documents/`, `%APPDATA%`,
   PSOCache.bin, Steam userdata, or anything Steam-Cloud-tracked).
 

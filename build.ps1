@@ -155,13 +155,31 @@ if ($Config -eq 'Release') {
     #
     # ------ Flags we deliberately DO NOT use ------
     #
-    # /guard:cf    — Control Flow Guard. Validates indirect call
-    #                targets against a compile-time-known set. This
-    #                is fundamentally incompatible with MinHook,
-    #                which patches function prologues at runtime to
-    #                redirect calls — those targets aren't in the
-    #                CFG metadata, so CFG would refuse to call them.
-    #                Without MinHook, no hooks, no fix.
+    # /guard:cf    — Control Flow Guard. Instruments indirect calls
+    #                in our compiled code with a runtime check
+    #                against a compile-time-generated bitmap of
+    #                legal call targets. If a call target isn't in
+    #                the bitmap, the process is terminated.
+    #
+    #                Why we don't enable it: cpu_hooks.cpp calls the
+    #                original (pre-hook) API implementations through
+    #                MinHook-provided trampolines — function pointers
+    #                stored in `g_real_GetSystemInfo`,
+    #                `g_real_GetActiveProcessorCount`, etc.
+    #                Those trampolines are executable memory that
+    #                MinHook ALLOCATES AT RUNTIME (via VirtualAlloc),
+    #                so by definition they cannot be in our build-
+    #                time CFG bitmap. With /guard:cf enabled, the
+    #                first call through one of those pointers would
+    #                trip the CFG check and terminate the process.
+    #
+    #                MinHook upstream has discussed CFG-aware
+    #                trampoline allocation (registering the
+    #                trampoline addresses dynamically via
+    #                SetProcessValidCallTargets) but it's not in the
+    #                v1.3.3 release we ship. Validating that
+    #                integration is a separate compatibility project
+    #                deferred past v1.0.0.
     #
     #                NOTE: Some CFG-related load-config metadata may
     #                still appear in the final binary because MSVC's
