@@ -5,8 +5,6 @@
 
 namespace dtf {
 
-static Config c_defaults() { return Config{}; }
-
 Config load_config(HMODULE self) {
     Config c;
     wchar_t* dir = get_module_dir(self);

@@ -739,6 +739,8 @@ dxmd-thread-fix/
 │   ├── config.h
 │   ├── log.cpp               Thread-safe file logger (truncate on start, then append per line)
 │   ├── log.h
+│   ├── path_util.cpp         Long-path-safe GetModuleFileNameW helper
+│   ├── path_util.h
 │   └── version.rc            Embedded VERSIONINFO resource
 ├── third_party/
 │   └── minhook/              Vendored MinHook 1.3.3 (BSD-2-Clause)
