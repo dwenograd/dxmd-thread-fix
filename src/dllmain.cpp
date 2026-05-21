@@ -190,21 +190,23 @@
 //      LogLevel=0 user sees no log artifact appear on disk at all
 //      (a trust signal — the DLL is provably silent when configured
 //      that way).
-//   2. load_config — read dxmd-thread-fix.ini next to this DLL.
-//   3. log_set_level — apply the parsed LogLevel; opens the log
-//      file if level > 0.
-//   4. host_is_dxmd — refuse to install CPU hooks in non-DXMD
+//   2. load_config + log_set_level — read dxmd-thread-fix.ini next
+//      to this DLL, then apply the parsed LogLevel (which opens
+//      the log file if level > 0).
+//   3. host_is_dxmd — refuse to install CPU hooks in non-DXMD
 //      hosts (see UNUSUAL THING #3).
-//   5. load_system_dxgi_and_resolve — load System32 dxgi and
+//   4. load_system_dxgi_and_resolve — load System32 dxgi and
 //      overwrite every pfn_FOO with the real address. Returns FALSE
 //      from DllMain if this fails (see UNUSUAL THING #4).
+//   5. If non-DXMD: log "forwarder-only mode" and return TRUE
+//      without installing CPU hooks.
 //   6. set_topology — capture the REAL CPU count via direct
 //      GetProcAddress (must run BEFORE step 7, because once hooks
 //      are installed the API code itself is patched and every
 //      caller — including us — enters the detour).
-//   7. install_cpu_hooks — three-pass MinHook install. See
-//      cpu_hooks.cpp for the design.
-//   8. Log FIX STATUS: ACTIVE or INACTIVE so the user can spot it.
+//   7. install_cpu_hooks — three-pass MinHook install (see
+//      cpu_hooks.cpp), then log FIX STATUS: ACTIVE or INACTIVE
+//      so the user can spot it.
 //
 // See src/DESIGN.md for the architectural narrative.
 

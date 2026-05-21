@@ -1,22 +1,21 @@
 ; dxgi.def - exact name + ordinal preservation for our proxy dxgi.dll.
 ;
 ; What we export: the 20 dxgi-namespace exports captured from the
-; Windows 10 / early-Windows-11-era System32 dxgi.dll export set
-; (`dumpbin /exports C:\Windows\System32\dxgi.dll`). This covers
-; DXMD's static dxgi imports plus middleware (PIX, AMD AGS, etc.)
-; that resolve dxgi exports at runtime via GetProcAddress.
+; current System32 dxgi.dll export set (`dumpbin /exports
+; C:\Windows\System32\dxgi.dll`). This covers DXMD's static dxgi
+; imports plus middleware (PIX, AMD AGS, etc.) that resolve dxgi
+; exports at runtime via GetProcAddress.
 ;
-; What we DO NOT export: newer Windows versions add additional
-; dxgi exports as the API evolves — e.g., Windows 11 ships a
-; `fothk` export at ordinal 1000 not present in the older capture.
-; We deliberately do not mirror these for two reasons:
-;   1. Their signatures are undocumented. Shipping a stub with a
-;      guessed calling convention or argument count is worse than
+; What we DO NOT export: any additional dxgi-namespace functions
+; that future Windows versions might add as the API evolves. We
+; deliberately do not pre-emptively mirror those for two reasons:
+;   1. Their signatures would be undocumented. Shipping a stub with
+;      a guessed calling convention or argument count is worse than
 ;      not shipping it — a wrong-shape stub could corrupt the
 ;      caller's stack on return.
 ;   2. DXMD shipped in 2016 with middleware from that era. None of
-;      it uses Windows 11-era exports.
-; A caller that imports an export we don't expose will see
+;      it uses post-2016 dxgi additions.
+; A caller that imports a dxgi export we don't expose will see
 ; GetProcAddress return NULL through our proxy (where it would
 ; have succeeded against real System32 dxgi). For DXMD this never
 ; happens. For arbitrary other apps that try to use our DLL as a

@@ -65,21 +65,20 @@ that our hooks are in place before `GetSystemInfo` is ever called.
 
 ### What "being dxgi.dll" requires
 
-Our proxy exports the 20 dxgi exports captured from System32 dxgi.dll
-on the Windows 10 / early Windows 11 export set (`src/dxgi.def`).
-DXMD imports a subset of these via its IAT; middleware and tooling
-(PIX, AMD AGS, etc.) may resolve others by name or ordinal at
-runtime via `GetProcAddress`. We preserve that observed set so
-anything that worked against the real dxgi.dll for DXMD still
-works against our proxy.
+Our proxy exports the 20 dxgi exports captured from the current
+System32 dxgi.dll export set (`src/dxgi.def`). DXMD imports a
+subset of these via its IAT; middleware and tooling (PIX, AMD AGS,
+etc.) may resolve others by name or ordinal at runtime via
+`GetProcAddress`. We preserve that observed set so anything that
+worked against the real dxgi.dll for DXMD still works against our
+proxy.
 
-We do NOT mirror exports that newer Windows versions add over time
-— e.g., Windows 11 ships a `fothk` export at ordinal 1000 that's
-not in our list. Those are deliberately omitted: their signatures
-are undocumented, and a wrong-shape stub would corrupt the
-caller's stack on return. DXMD shipped in 2016 with middleware
-from that era; none of it uses Windows-11-era exports. See
-`src/dxgi.def` for the full rationale.
+We do NOT preemptively mirror any future dxgi-namespace exports
+that newer Windows versions might add. Their signatures would be
+undocumented and a wrong-shape stub would corrupt the caller's
+stack on return. DXMD shipped in 2016 with middleware from that
+era; none of it uses post-2016 dxgi additions. See `src/dxgi.def`
+for the full rationale.
 
 We MUST:
 - Export the same 20 names with the same ordinals (`src/dxgi.def`).
