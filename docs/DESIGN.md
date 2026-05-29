@@ -285,8 +285,8 @@ games corroborate it.
   avoids it because the static CRT relies on per-thread
   notifications for some internal state.
 
-- **No `/guard:cf`** (Control Flow Guard) in the build. cpu_hooks.cpp
-  calls the original APIs through MinHook trampolines stored in
+- **No `/guard:cf`** (Control Flow Guard) in the build. SECTION 7 of
+  `dxmd_thread_fix.cpp` calls the original APIs through MinHook trampolines stored in
   `g_real_*` function pointers; those trampolines live in runtime-
   allocated executable memory (MinHook uses `VirtualAlloc`). Whether
   CFG accepts such targets depends on Windows version and on whether
@@ -350,7 +350,7 @@ The startup-truncate-then-append pattern means each game run
 overwrites the prior log. So "send me your log" from a support
 forum gets the current run's diagnostics, not 50 launches' worth.
 
-### Consistent fake topology (`dxmd_thread_fix.cpp` SECTION 5/`dxmd_thread_fix.cpp` SECTION 5)
+### Consistent fake topology (`dxmd_thread_fix.cpp` SECTION 5)
 
 Every hook reads from one `FakeTopology` struct. Returning
 inconsistent values across APIs (8 from `GetSystemInfo`, 64 from
@@ -413,7 +413,7 @@ allows) vs. what the source actually shows it doing:
   it could load any other DLL on the system. The source shows the
   ONLY use of `LoadLibraryExW` is for the real dxgi.dll at the path
   returned by `GetSystemDirectoryW` (normally `System32\dxgi.dll`)
-  — see `dxgi_exports.cpp::load_system_dxgi_and_resolve`. Verify
+  — see `dxmd_thread_fix.cpp` SECTION 6 `load_system_dxgi_and_resolve`. Verify
   by grep.
 - It does NOT import `ws2_32`, `wininet`, `winhttp` (no socket /
   HTTP capability — would need a runtime LoadLibrary to get it, and

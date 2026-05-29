@@ -35,11 +35,11 @@
 ; the pfn_FOO global in our .data section.
 ;
 ; ============================================================
-; pfn_FOO is NEVER NULL (this is critical - see dtf_traps.cpp)
+; pfn_FOO is NEVER NULL (this is critical - see SECTION 1 of dxmd_thread_fix.cpp)
 ; ============================================================
 ;
-; The pfn_FOO globals are initialized AT COMPILE TIME (in
-; dxgi_exports.cpp) to point at trap functions in dtf_traps.cpp.
+; The pfn_FOO globals are initialized AT COMPILE TIME (in SECTION 2 of
+; dxmd_thread_fix.cpp) to point at trap functions in SECTION 1.
 ; That's not the obvious thing to do - a normal C++ programmer would
 ; default them to nullptr and resolve them at runtime in DllMain.
 ;
@@ -57,7 +57,7 @@
 ; Windows version (rare; mostly Windows-10+-only) keep pointing at
 ; their trap, which returns a clean failure code.
 ;
-; The trap return values are documented in dtf_traps.cpp. Summary:
+; The trap return values are documented in SECTION 1 of dxmd_thread_fix.cpp. Summary:
 ;   - generic exports: 0 (empirically accepted by apphelp's compat
 ;     pass during DXMD startup; not a documented guarantee)
 ;   - CreateDXGIFactory{,1,2} / DXGIGetDebugInterface1: zero out-pointer

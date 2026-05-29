@@ -29,7 +29,7 @@
 ; On older Windows (Win7 SP1 / Win 8.1) some of these 20 exports may
 ; be missing from the host's System32 dxgi entirely; for those
 ; slots, the per-export pfn_FOO stays pointing at its compile-time
-; trap (see src/dtf_traps.cpp). That degrades a missing-export call
+; trap (see SECTION 1 of src/dxmd_thread_fix.cpp). That degrades a missing-export call
 ; to a typed failure return rather than a crash.
 ;
 ; Why preserve ordinals (and not just names)?
@@ -42,8 +42,8 @@
 ;     buys us compatibility with the long tail.
 ;
 ; Each export's implementation is the same-named symbol in dxgi_stubs.asm,
-; which tail-jumps to the runtime-resolved real-dxgi pointer in
-; dxgi_exports.cpp. See src/DESIGN.md for the full proxy-DLL story.
+; which tail-jumps to the runtime-resolved real-dxgi pointer in SECTION 6 of
+; dxmd_thread_fix.cpp. See docs/DESIGN.md for the full proxy-DLL story.
 
 LIBRARY dxgi
 EXPORTS

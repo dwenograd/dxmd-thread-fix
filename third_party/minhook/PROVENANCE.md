@@ -59,7 +59,7 @@ auto-generated source archive for each release tag).
 ## What our code calls
 
 The full list of MinHook API calls our code makes (all in
-`src/cpu_hooks.cpp`):
+`src/dxmd_thread_fix.cpp` SECTION 7):
 
 - `MH_Initialize()` — on hook install
 - `MH_CreateHook()` — once per hook target

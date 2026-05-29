@@ -120,7 +120,7 @@ if ($Config -eq 'Release') {
     #
     # /O2 /Oi /GL  — standard release optimization. /GL enables whole-
     #                program optimization (LTCG). The traps in
-    #                dtf_traps.cpp use __declspec(noinline) to survive
+    #                SECTION 1 of dxmd_thread_fix.cpp use __declspec(noinline) to survive
     #                this (we need their symbols intact for the pfn_FOO
     #                initializers).
     #
@@ -156,7 +156,7 @@ if ($Config -eq 'Release') {
     #                in our compiled code with a runtime check
     #                against a bitmap of legal call targets.
     #
-    #                Why we don't enable it: cpu_hooks.cpp calls the
+    #                Why we don't enable it: SECTION 7 of dxmd_thread_fix.cpp calls the
     #                original (pre-hook) API implementations through
     #                MinHook-provided trampolines (function pointers
     #                stored in `g_real_GetSystemInfo`, etc.). Those
@@ -308,7 +308,7 @@ if ($Config -eq 'Release') {
     # /LTCG: pairs with /GL on the compile side for whole-program opt.
     # /OPT:REF: drop unused functions/data.
     # /OPT:ICF: fold identical-COMDAT functions to one address.
-    #          (See dtf_traps.cpp note — this can fold two trap
+    #          (See the SECTION 1 trap note in dxmd_thread_fix.cpp — this can fold two trap
     #          functions with identical machine code to one address,
     #          which is safe but worth knowing when debugging.)
     # /RELEASE: writes a PE image checksum into the optional header
