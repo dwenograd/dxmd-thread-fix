@@ -574,7 +574,6 @@ static void WINAPI Hooked_GetNativeSystemInfo(LPSYSTEM_INFO si) {
 
 static DWORD WINAPI Hooked_GetActiveProcessorCount(WORD group) {
     const auto& topo = topology();
-    DWORD real = g_real_GetActiveProcessorCount(group);
     DWORD reported;
     if (group == ALL_PROCESSOR_GROUPS || group == 0) {
         reported = topo.logical_processors;
@@ -583,6 +582,7 @@ static DWORD WINAPI Hooked_GetActiveProcessorCount(WORD group) {
     }
     if (log_level() >= 2 ||
         (log_level() >= 1 && first_hit(&g_fh_GetActiveProcessorCount))) {
+        const DWORD real = g_real_GetActiveProcessorCount(group);
         log_line("GetActiveProcessorCount(group=%u): %lu -> %lu",
                  (unsigned)group, real, reported);
     }
@@ -591,7 +591,6 @@ static DWORD WINAPI Hooked_GetActiveProcessorCount(WORD group) {
 
 static DWORD WINAPI Hooked_GetMaximumProcessorCount(WORD group) {
     const auto& topo = topology();
-    DWORD real = g_real_GetMaximumProcessorCount(group);
     DWORD reported;
     if (group == ALL_PROCESSOR_GROUPS || group == 0) {
         reported = topo.logical_processors;
@@ -600,6 +599,7 @@ static DWORD WINAPI Hooked_GetMaximumProcessorCount(WORD group) {
     }
     if (log_level() >= 2 ||
         (log_level() >= 1 && first_hit(&g_fh_GetMaximumProcessorCount))) {
+        const DWORD real = g_real_GetMaximumProcessorCount(group);
         log_line("GetMaximumProcessorCount(group=%u): %lu -> %lu",
                  (unsigned)group, real, reported);
     }
@@ -607,18 +607,18 @@ static DWORD WINAPI Hooked_GetMaximumProcessorCount(WORD group) {
 }
 
 static WORD WINAPI Hooked_GetActiveProcessorGroupCount(void) {
-    WORD real = g_real_GetActiveProcessorGroupCount();
     if (log_level() >= 2 ||
         (log_level() >= 1 && first_hit(&g_fh_GetActiveProcessorGroupCount))) {
+        const WORD real = g_real_GetActiveProcessorGroupCount();
         log_line("GetActiveProcessorGroupCount: %u -> 1", (unsigned)real);
     }
     return 1;
 }
 
 static WORD WINAPI Hooked_GetMaximumProcessorGroupCount(void) {
-    WORD real = g_real_GetMaximumProcessorGroupCount();
     if (log_level() >= 2 ||
         (log_level() >= 1 && first_hit(&g_fh_GetMaximumProcessorGroupCount))) {
+        const WORD real = g_real_GetMaximumProcessorGroupCount();
         log_line("GetMaximumProcessorGroupCount: %u -> 1", (unsigned)real);
     }
     return 1;
